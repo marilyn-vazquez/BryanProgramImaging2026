@@ -18,22 +18,81 @@ from skimage.util import img_as_float
 # -------------------------------------------------------------------
 
 def preprocess_single(image_input, sigma=0.5, clip_limit=0.015):
+        """
+    Preprocess a single microscopy image.
+
+    This function loads an image, converts it to grayscale floating-point
+    format, removes non-biological regions, smooths noise using a Gaussian
+    filter, and enhances local contrast using CLAHE.
+
+    Parameters
+    ----------
+    image_input : str, pathlib.Path, or numpy.ndarray
+        Input image file path or image array.
+    sigma : float, optional
+        Standard deviation for Gaussian smoothing. Larger values produce
+        stronger smoothing.
+    clip_limit : float, optional
+        Contrast limiting parameter for CLAHE enhancement.
+
+    Returns
+    -------
+    numpy.ndarray
+        Preprocessed grayscale image with enhanced contrast.
+
+    Notes
+    -----
+    The image is cropped to remove the microscope information bar before
+    further processing.
+    """
+    # prepares a raw microscopy image before applying filtration methods. The goal is to remove noise improve contrast, and standardize images. 
     # Load image as grayscale if it's a path
     img = img_as_float(io.imread(image_input, as_gray=True)) if isinstance(image_input, (str, Path)) else img_as_float(image_input)
-   
-    # Crop information bar
+   # Reads image as grayscale, converts into floating point pixel values between 0 and 1
+    # Crop information bar, ensures only biological regions are analyzed
     img = img[:3850, :]
    
-    # Smooth image
+    # Smooth image, applies gaussian blur, reduces pixel-level noise. 
     img_smoothed = filters.gaussian(img, sigma=sigma)
    
-    # Apply CLAHE
+    # Apply CLAHE, adaptive histogram equalization, improves contrast. 
     img_clahe = exposure.equalize_adapthist(img_smoothed, kernel_size=256, clip_limit=clip_limit)
-   
+   # returns img_clache, normalized and enhanced grayscale image ready for filtration
     return img_clahe
 
 def process_batch(image_paths, reference_path, out_dir, sigma=0.5, clip_limit=0.015):
-    # Ensure the output directory exists
+     """
+    Apply preprocessing to a collection of microscopy images.
+
+    Each image is processed using Gaussian smoothing and CLAHE.
+    Histogram matching is then applied so all images have comparable
+    intensity distributions relative to a reference image.
+
+    Parameters
+    ----------
+    image_paths : list
+        Collection of image file paths to process.
+    reference_path : str or pathlib.Path
+        Reference image used for histogram normalization.
+    out_dir : str or pathlib.Path
+        Directory where processed images are saved.
+    sigma : float, optional
+        Gaussian smoothing parameter.
+    clip_limit : float, optional
+        CLAHE contrast enhancement parameter.
+
+    Returns
+    -------
+    int
+        Number of successfully processed images.
+
+    Notes
+    -----
+    Images are saved as 32-bit floating point TIFF files to preserve
+    intensity precision.
+    """
+    # Processes muultiple images using the same pipeline and standardizes their appearance relative to reference image. 
+    #Ensure the output directory exists
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -65,7 +124,7 @@ def process_batch(image_paths, reference_path, out_dir, sigma=0.5, clip_limit=0.
         processed_files_count += 1
        
     return processed_files_count
-
+# saves standard TIFF files, returns the number of processed images
 # -------------------------------------------------------------------
 # MORPHOLOGY
 # -------------------------------------------------------------------
@@ -74,10 +133,41 @@ def process_batch(image_paths, reference_path, out_dir, sigma=0.5, clip_limit=0.
 def find(condition):
     res = np.nonzero(condition)
     return res
+   """
+    Find indices in an array satisfying a given condition.
 
+    Parameters
+    ----------
+    condition : numpy.ndarray
+        Boolean array indicating desired locations.
+
+    Returns
+    -------
+    tuple
+        Array indices where the condition is True.
+    """
+# helper function for finding pixel locations satisfy a condition. 
 
 # Thresholding operation: pixels <= threshold become 0, pixels > threshold become 1
 def biImg_by_threshold_leq(img, threshold):
+        """
+    Convert an image into a binary image using a lower threshold.
+
+    Pixels with intensity values less than or equal to the threshold
+    are assigned 0, while pixels above the threshold are assigned 1.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input grayscale image.
+    threshold : float
+        Intensity threshold value.
+
+    Returns
+    -------
+    numpy.ndarray
+        Binary image.
+    """
     output_img = np.copy(img)
 
     idxs_0 = find(img <= threshold)
@@ -91,6 +181,24 @@ def biImg_by_threshold_leq(img, threshold):
 
 # Thresholding operation: pixels >= threshold become 0, pixels < threshold become 1
 def biImg_by_threshold_geq(img, threshold):
+      """
+    Convert an image into a binary image using an upper threshold.
+
+    Pixels greater than or equal to the threshold are assigned 0,
+    while pixels below the threshold are assigned 1.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input grayscale image.
+    threshold : float
+        Intensity threshold value.
+
+    Returns
+    -------
+    numpy.ndarray
+        Binary image.
+    """
     output_img = np.copy(img)
 
     idxs_0 = find(img >= threshold)
@@ -106,7 +214,27 @@ def biImg_by_threshold_geq(img, threshold):
 def erosion(input_np_array,
             input_list_of_points,
             minimal_pixel_value=0):
+ """
+    Perform morphological erosion on a binary image.
 
+    Erosion removes boundary pixels and reduces foreground structures.
+    The output value of each pixel is determined by the minimum value
+    within the structuring element neighborhood.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Binary input image.
+    input_list_of_points : list
+        Structuring element coordinate offsets.
+    minimal_pixel_value : int, optional
+        Pixel value representing background.
+
+    Returns
+    -------
+    numpy.ndarray
+        Eroded binary image.
+    """
     input_np_array_shape = np.shape(input_np_array)
     output_np_array = np.zeros(input_np_array_shape)
 
@@ -136,7 +264,26 @@ def erosion(input_np_array,
 def dilation(input_np_array,
              input_list_of_points,
              maximal_pixel_value=1):
+ """
+    Perform morphological dilation on a binary image.
 
+    Dilation expands foreground regions by assigning each pixel the
+    maximum value found within the structuring element neighborhood.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Binary input image.
+    input_list_of_points : list
+        Structuring element coordinate offsets.
+    maximal_pixel_value : int, optional
+        Pixel value representing foreground.
+
+    Returns
+    -------
+    numpy.ndarray
+        Dilated binary image.
+    """
     input_np_array_shape = np.shape(input_np_array)
     output_np_array = np.zeros(input_np_array_shape)
 
@@ -164,7 +311,24 @@ def dilation(input_np_array,
 
 def opening(input_np_array,
             input_list_of_points):
+ """
+    Perform morphological opening.
 
+    Opening consists of erosion followed by dilation. It removes small
+    objects and noise while preserving larger structures.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Binary input image.
+    input_list_of_points : list
+        Structuring element coordinates.
+
+    Returns
+    -------
+    numpy.ndarray
+        Opened image.
+    """
     return dilation(
         erosion(input_np_array, input_list_of_points),
         input_list_of_points
@@ -173,7 +337,24 @@ def opening(input_np_array,
 
 def closing(input_np_array,
             input_list_of_points):
+  """
+    Perform morphological closing.
 
+    Closing consists of dilation followed by erosion. It fills small
+    holes and connects nearby foreground regions.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Binary input image.
+    input_list_of_points : list
+        Structuring element coordinates.
+
+    Returns
+    -------
+    numpy.ndarray
+        Closed image.
+    """
     return erosion(
         dilation(input_np_array, input_list_of_points),
         input_list_of_points
@@ -181,7 +362,40 @@ def closing(input_np_array,
 
 @nb.jit()
 def get_rectangle_coordinates(input_np_array):
+    """
+    Generate coordinate offsets for a rectangular structuring element.
 
+    This function creates a list of relative pixel coordinates centered
+    around the origin of an input array. These coordinates define the
+    neighborhood used by morphological operations such as erosion and
+    dilation.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Array representing the desired size of the rectangular
+        structuring element.
+
+    Returns
+    -------
+    list
+        List of numpy arrays containing coordinate offsets relative
+        to the center pixel.
+
+    Notes
+    -----
+    The center of the structuring element is treated as (0,0). For
+    example, a 3x3 structuring element produces coordinates covering
+    the entire neighborhood around the central pixel.
+
+    Example
+    -------
+    A 3x3 structuring element generates offsets:
+
+        [-1, -1]  [0, -1]  [1, -1]
+        [-1,  0]  [0,  0]  [1,  0]
+        [-1,  1]  [0,  1]  [1,  1]
+    """
     input_np_array_shape = np.shape(input_np_array)
     output_list = []
 
@@ -197,7 +411,28 @@ def get_rectangle_coordinates(input_np_array):
 
 
 def get_horizontal_SE_list(maximal_SE_lengths):
+ """
+    Generate horizontal line structuring elements of increasing size.
 
+    This function creates a collection of horizontal structuring elements
+    with lengths ranging from 2 pixels up to the specified maximum length.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum size of the horizontal structuring element.
+
+    Returns
+    -------
+    list
+        List of horizontal structuring elements. Each element contains
+        coordinate offsets representing pixels along a horizontal line.
+
+    Notes
+    -----
+    These structuring elements are used in morphological operations to
+    analyze horizontally oriented structures at different spatial scales.
+    """
     kernel_list = []
 
     for i in range(2, maximal_SE_lengths + 1):
@@ -227,7 +462,28 @@ def get_horizontal_SE_list(maximal_SE_lengths):
 
 
 def get_vertical_SE_list(maximal_SE_lengths):
+  """
+    Generate vertical line structuring elements of increasing size.
 
+    Creates vertical structuring elements ranging from length 2 to the
+    specified maximum length.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum size of the vertical structuring element.
+
+    Returns
+    -------
+    list
+        List of vertical structuring elements represented as coordinate
+        offsets.
+
+    Notes
+    -----
+    These kernels allow morphological operations to examine vertically
+    oriented image structures across multiple spatial scales.
+    """
     kernel_list = []
 
     for i in range(2, maximal_SE_lengths + 1):
@@ -257,7 +513,29 @@ def get_vertical_SE_list(maximal_SE_lengths):
 
 
 def get_square_SE_list(maximal_SE_lengths):
+   """
+    Generate square structuring elements of increasing size.
 
+    This function creates square neighborhoods used for morphological
+    operations. Each square size produces a different spatial scale
+    for filtration.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum side length of the square structuring element.
+
+    Returns
+    -------
+    list
+        Collection of square structuring elements represented by
+        coordinate offsets.
+
+    Notes
+    -----
+    Increasing structuring element size allows morphological
+    filtrations to capture features at progressively larger scales.
+    """
     kernel_list = []
 
     for i in range(2, maximal_SE_lengths + 1):
@@ -268,7 +546,28 @@ def get_square_SE_list(maximal_SE_lengths):
     return kernel_list
 
 def img_to_1d_array(img):
+    """
+    Convert a two-dimensional image array into a one-dimensional array.
 
+    Persistent homology libraries often require image data to be stored
+    as a flattened vector. This function converts each row of the image
+    into a single ordered array.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Two-dimensional image array.
+
+    Returns
+    -------
+    numpy.ndarray
+        Flattened one-dimensional representation of the image.
+
+    Notes
+    -----
+    Pixel ordering is preserved by concatenating rows in reverse order
+    relative to the input image.
+    """
     result = []
     img_shape = np.shape(img)
 
@@ -279,7 +578,26 @@ def img_to_1d_array(img):
 
 
 def persistence_of_img(img, maxdim=1):
+"""
+    Compute persistent homology of an image filtration.
 
+    Calculates persistence diagrams describing the birth and death
+    of topological features.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input filtration image.
+    maxdim : int, optional
+        Maximum homology dimension calculated.
+
+    Returns
+    -------
+    list
+        Two persistence diagrams:
+        - H0: connected components
+        - H1: loops and holes
+    """
     img = np.asarray(img, dtype=np.float64)
 
     if hasattr(cripser, "compute_ph"):
@@ -295,7 +613,28 @@ def persistence_of_img(img, maxdim=1):
 def persistence_of_morph_filtration(img,
                                     kernel_list,
                                     morph_type='closing'):
+ """
+    Compute persistent homology from a morphological filtration.
 
+    Multiple morphological operations are applied using structuring
+    elements of increasing size. The resulting filtration captures
+    how image structures change across spatial scales.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input binary image.
+    kernel_list : list
+        Collection of structuring elements.
+    morph_type : str, optional
+        Morphological operation:
+        'opening', 'closing', 'erosion', or 'dilation'.
+
+    Returns
+    -------
+    list
+        Persistence diagrams for H0 and H1 features.
+    """
     img_shape = np.shape(img)
     img_buff = np.zeros(img_shape)
     img_buff = img_buff + img
@@ -346,7 +685,22 @@ def compute_upper_star(cropped):
        cropped_inv.astype(float),
        maxdim=1
     )
-       
+"""
+    Compute an upper-star filtration persistence diagram.
+
+    The image intensity is inverted so bright structures appear earlier
+    in the filtration.
+
+    Parameters
+    ----------
+    cropped : numpy.ndarray
+        Input grayscale image.
+
+    Returns
+    -------
+    tuple
+        Persistence diagram and inverted filtration image.
+    """
     return ph_upper, cropped_inv
 
 def compute_lower_star(cropped):
@@ -354,7 +708,22 @@ def compute_lower_star(cropped):
         cropped.astype(float),
         maxdim=1
     )
+    """
+    Compute a lower-star filtration persistence diagram.
 
+    Uses original image intensities so darker structures appear earlier
+    in the filtration.
+
+    Parameters
+    ----------
+    cropped : numpy.ndarray
+        Input grayscale image.
+
+    Returns
+    -------
+    numpy.ndarray
+        Persistence diagram.
+    """
     return ph
 
 
@@ -364,7 +733,25 @@ def compute_lower_star(cropped):
 
 
 def density_filtration(binary_image, max_dist=5):
+ """
+    Generate a density-based filtration from a binary image.
 
+    Local pixel density is calculated by counting foreground pixels
+    within a specified radius. Dense regions receive lower filtration
+    values and appear earlier.
+
+    Parameters
+    ----------
+    binary_image : numpy.ndarray
+        Binary image containing foreground structures.
+    max_dist : float, optional
+        Radius used for neighborhood density calculations.
+
+    Returns
+    -------
+    numpy.ndarray
+        Density filtration image.
+    """
     height, width = binary_image.shape
     # Find foreground pixel coordinates
     points = np.argwhere(binary_image)
@@ -403,7 +790,21 @@ def density_filtration(binary_image, max_dist=5):
 
 
 def compute_density_ph(binary_image, max_dist=5):
+ """
+    Compute persistent homology using density filtration.
 
+    Parameters
+    ----------
+    binary_image : numpy.ndarray
+        Binary input image.
+    max_dist : float, optional
+        Neighborhood radius for density calculation.
+
+    Returns
+    -------
+    tuple
+        Density filtration image and persistence diagram.
+    """
     density_img = density_filtration(binary_image, max_dist)
 
     ph_density = cripser.compute_ph(
