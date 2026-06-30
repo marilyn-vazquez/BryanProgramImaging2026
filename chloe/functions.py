@@ -31,9 +31,9 @@ def preprocess_single(image_input, sigma=0.5, clip_limit=0.015):
         Input image file path or image array.
     sigma : float, optional
         Standard deviation for Gaussian smoothing. Larger values produce
-        stronger smoothing.
+        stronger smoothing. Default value is 0.5
     clip_limit : float, optional
-        Contrast limiting parameter for CLAHE enhancement.
+        Contrast limiting parameter for CLAHE enhancement. Default value is 0.015
 
     Returns
     -------
@@ -44,6 +44,12 @@ def preprocess_single(image_input, sigma=0.5, clip_limit=0.015):
     -----
     The image is cropped to remove the microscope information bar before
     further processing.
+
+    Example
+    -------
+  >>> processed_img = preprocess_single("cilia_image.png", sigma=0.5, clip_limit=0.015)
+    >>> print(type(processed_img), processed_img.shape)
+    <class 'numpy.ndarray'> (3850, 4000)
     """
     # prepares a raw microscopy image before applying filtration methods. The goal is to remove noise improve contrast, and standardize images. 
     # Load image as grayscale if it's a path
@@ -90,6 +96,11 @@ def process_batch(image_paths, reference_path, out_dir, sigma=0.5, clip_limit=0.
     -----
     Images are saved as 32-bit floating point TIFF files to preserve
     intensity precision.
+
+    Example
+    ------
+    >>> processed = process_batch(["img1.png", "img2.png"], "ref.png", "./output")
+    >>> print(processed)
     """
     # Processes muultiple images using the same pipeline and standardizes their appearance relative to reference image. 
     #Ensure the output directory exists
@@ -145,6 +156,11 @@ def find(condition):
     -------
     tuple
         Array indices where the condition is True.
+    Example
+    ------
+    >>> idxs = find(img > 0.5)
+    >>> print(type(idxs), len(idxs))
+    <class 'tuple'> 2
     """
 # helper function for finding pixel locations satisfy a condition. 
 
@@ -167,6 +183,11 @@ def biImg_by_threshold_leq(img, threshold):
     -------
     numpy.ndarray
         Binary image.
+    Example
+    -------
+    >>> binary_img = biImg_by_threshold_leq(img, threshold=0.5)
+    >>> print(binary_img.min(), binary_img.max())
+    0.0 1.0
     """
     output_img = np.copy(img)
 
@@ -198,6 +219,12 @@ def biImg_by_threshold_geq(img, threshold):
     -------
     numpy.ndarray
         Binary image.
+
+    Example
+    -------
+    >>> binary_img = biImg_by_threshold_geq(img, threshold=0.5)
+    >>> print(binary_img.min(), binary_img.max())
+    0.0 1.0
     """
     output_img = np.copy(img)
 
@@ -228,12 +255,18 @@ def erosion(input_np_array,
     input_list_of_points : list
         Structuring element coordinate offsets.
     minimal_pixel_value : int, optional
-        Pixel value representing background.
+        Pixel value representing background. Default at 0. 
 
     Returns
     -------
     numpy.ndarray
         Eroded binary image.
+
+    Example
+    -------
+    >>> eroded_img = erosion(binary_img, square_kernels[0])
+    >>> print(type(eroded_img), eroded_img.shape)
+    <class 'numpy.ndarray'> (3850, 4000)
     """
     input_np_array_shape = np.shape(input_np_array)
     output_np_array = np.zeros(input_np_array_shape)
@@ -277,12 +310,18 @@ def dilation(input_np_array,
     input_list_of_points : list
         Structuring element coordinate offsets.
     maximal_pixel_value : int, optional
-        Pixel value representing foreground.
+        Pixel value representing foreground. Default of 1. 
 
     Returns
     -------
     numpy.ndarray
         Dilated binary image.
+
+    Example
+    -------
+    >>> dilated_img = dilation(binary_img, square_kernels[0])
+    >>> print(type(dilated_img), dilated_img.shape)
+    <class 'numpy.ndarray'> (3850, 4000)
     """
     input_np_array_shape = np.shape(input_np_array)
     output_np_array = np.zeros(input_np_array_shape)
@@ -328,6 +367,12 @@ def opening(input_np_array,
     -------
     numpy.ndarray
         Opened image.
+
+   Example
+   -------
+   >>> opened_img = opening(binary_img, square_kernels[0])
+    >>> print(type(opened_img), opened_img.shape)
+    <class 'numpy.ndarray'> (3850, 4000)
     """
     return dilation(
         erosion(input_np_array, input_list_of_points),
@@ -354,6 +399,12 @@ def closing(input_np_array,
     -------
     numpy.ndarray
         Closed image.
+
+    Example
+    -------
+    >>> closed_img = closing(binary_img, square_kernels[0])
+    >>> print(type(closed_img), closed_img.shape)
+    <class 'numpy.ndarray'> (3850, 4000)
     """
     return erosion(
         dilation(input_np_array, input_list_of_points),
@@ -432,6 +483,12 @@ def get_horizontal_SE_list(maximal_SE_lengths):
     -----
     These structuring elements are used in morphological operations to
     analyze horizontally oriented structures at different spatial scales.
+
+    Example
+    -------
+    >>> h_kernels = get_horizontal_SE_list(maximal_SE_lengths=5)
+    >>> print(type(h_kernels), len(h_kernels))
+    <class 'list'> 4
     """
     kernel_list = []
 
@@ -483,6 +540,12 @@ def get_vertical_SE_list(maximal_SE_lengths):
     -----
     These kernels allow morphological operations to examine vertically
     oriented image structures across multiple spatial scales.
+
+    Example
+    -------
+    >>> v_kernels = get_vertical_SE_list(maximal_SE_lengths=5)
+    >>> print(type(v_kernels), len(v_kernels))
+    <class 'list'> 4
     """
     kernel_list = []
 
@@ -535,6 +598,12 @@ def get_square_SE_list(maximal_SE_lengths):
     -----
     Increasing structuring element size allows morphological
     filtrations to capture features at progressively larger scales.
+
+    Example
+    -------
+    >>> square_kernels = get_square_SE_list(maximal_SE_lengths=5)
+    >>> print(type(square_kernels), len(square_kernels))
+    <class 'list'> 4
     """
     kernel_list = []
 
@@ -567,6 +636,12 @@ def img_to_1d_array(img):
     -----
     Pixel ordering is preserved by concatenating rows in reverse order
     relative to the input image.
+
+    Example
+    -------
+    >>> flattened = flatten_img_reverse_rows(img)
+    >>> print(flattened.ndim, flattened.shape[0] == img.size)
+    1 True
     """
     result = []
     img_shape = np.shape(img)
@@ -597,6 +672,12 @@ def persistence_of_img(img, maxdim=1):
         Two persistence diagrams:
         - H0: connected components
         - H1: loops and holes
+
+    Example
+    -------
+    >>> h0_h1_diagrams = compute_persistence(img, maxdim=1)
+    >>> print(type(h0_h1_diagrams), len(h0_h1_diagrams))
+    <class 'list'> 2
     """
     img = np.asarray(img, dtype=np.float64)
 
@@ -634,6 +715,12 @@ def persistence_of_morph_filtration(img,
     -------
     list
         Persistence diagrams for H0 and H1 features.
+
+    Example
+    -------
+    >>> h0_h1_diagrams = compute_morphological_persistence(binary_img, square_kernels, morph_type='opening')
+    >>> print(type(h0_h1_diagrams), len(h0_h1_diagrams))
+    <class 'list'> 2
     """
     img_shape = np.shape(img)
     img_buff = np.zeros(img_shape)
@@ -700,6 +787,12 @@ def compute_upper_star(cropped):
     -------
     tuple
         Persistence diagram and inverted filtration image.
+    
+    Example
+    -------
+    >>> diagram, inverted_img = compute_upper_star_persistence(cropped)
+    >>> print(type(diagram), type(inverted_img))
+    <class 'tuple'> <class 'numpy.ndarray'>
     """
     return ph_upper, cropped_inv
 
@@ -723,6 +816,12 @@ def compute_lower_star(cropped):
     -------
     numpy.ndarray
         Persistence diagram.
+        
+    Example 
+    -------
+    >>> diagram = compute_lower_star_persistence(cropped)
+    >>> print(type(diagram), diagram.ndim)
+    <class 'numpy.ndarray'> 2
     """
     return ph
 
@@ -745,12 +844,18 @@ def density_filtration(binary_image, max_dist=5):
     binary_image : numpy.ndarray
         Binary image containing foreground structures.
     max_dist : float, optional
-        Radius used for neighborhood density calculations.
+        Radius used for neighborhood density calculations. Default at 5.
 
     Returns
     -------
     numpy.ndarray
         Density filtration image.
+    
+    Example
+    -------
+    >>> filtration_img = compute_density_filtration(binary_img, max_dist=5.0)
+    >>> print(type(filtration_img), filtration_img.shape)
+    <class 'numpy.ndarray'> (3850, 4000)
     """
     height, width = binary_image.shape
     # Find foreground pixel coordinates
@@ -798,12 +903,18 @@ def compute_density_ph(binary_image, max_dist=5):
     binary_image : numpy.ndarray
         Binary input image.
     max_dist : float, optional
-        Neighborhood radius for density calculation.
+        Neighborhood radius for density calculation. Default is 5
 
     Returns
     -------
     tuple
         Density filtration image and persistence diagram.
+    
+    Example
+    -------
+    >>> filtration_img, diagram = compute_density_persistence(binary_img, max_dist=5.0)
+    >>> print(type(filtration_img), type(diagram))
+    <class 'numpy.ndarray'> <class 'numpy.ndarray'>
     """
     density_img = density_filtration(binary_image, max_dist)
 
