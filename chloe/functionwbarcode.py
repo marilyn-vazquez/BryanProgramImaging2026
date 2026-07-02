@@ -333,7 +333,7 @@ if __name__ == '__main__':
         
         img = cv2.imread(str(img_path), 0)
         if img is None:
-            print(f"   ❌ Error loading {img_path.name}")
+            print(f"Error loading {img_path.name}")
             continue
             
         # Standard dynamic global threshold for Morphology/Density
@@ -375,6 +375,6 @@ if __name__ == '__main__':
             np.save(f'{outputFolder}/{base_name}_morph_{morph_mode}_dim0.npy', get_barcode_stats(m_d0))
             np.save(f'{outputFolder}/{base_name}_morph_{morph_mode}_dim1.npy', get_barcode_stats(m_d1))
             
-        print(f"   ✅ Saved all feature vectors successfully.")
+        print(f" Saved all feature vectors successfully.")
 
     print(f"\nPipeline finished! View your statistical collections inside: '{outputFolder}/'")
