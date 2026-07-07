@@ -2,12 +2,24 @@
 
 import numpy as np
 import numba as nb
+import pandas as pd
 import cripser
+import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
 from pathlib import Path
 from skimage import io, exposure, filters
 from skimage.util import img_as_float
 from persim import PersLandscapeApprox
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    ConfusionMatrixDisplay
+)
 
 # -------------------------------------------------------------------
 # PRE-PROCESSING
@@ -133,7 +145,7 @@ def process_batch(image_paths, reference_path, out_dir, sigma=0.5, clip_limit=0.
     return processed_files_count
 # saves standard TIFF files, returns the number of processed images
 # -------------------------------------------------------------------
-# MORPHOLOGY
+# MORPHOLOGY FILTRATION
 # -------------------------------------------------------------------
 
 # Basic tool for finding indices in a NumPy array
@@ -759,7 +771,7 @@ def persistence_of_morph_filtration(img,
     return PDs
 
 # --------------------------------------------------------------
-# UPPER / LOWER STAR
+# UPPER / LOWER STAR FILTRATION
 # --------------------------------------------------------------
 
 def compute_upper_star(cropped):
@@ -946,7 +958,7 @@ def cripser_ph_to_dgms(ph_array, maxdim=1):
     return dgms
 
 
-def filter_dgm_for_landscape(dgm, min_persistence=0.02, max_pairs=1000):
+def filter_dgm_for_landscape(dgm, min_persistence=0.02):
     """
     Filters one persistence diagram before computing the landscape.
     """
@@ -974,21 +986,10 @@ def filter_dgm_for_landscape(dgm, min_persistence=0.02, max_pairs=1000):
     # Remove low-persistence features
     dgm = dgm[persistence > min_persistence]
 
-    if len(dgm) == 0:
-        return np.empty((0, 2))
-
-    # Recompute persistence after filtering
-    persistence = dgm[:, 1] - dgm[:, 0]
-
-    # Keep only the most persistent features
-    if max_pairs is not None and len(dgm) > max_pairs:
-        order = np.argsort(persistence)[::-1]
-        dgm = dgm[order[:max_pairs]]
-
     return dgm
 
 
-def filter_dgms_for_landscape(dgms, min_persistence=0.02, max_pairs=1000):
+def filter_dgms_for_landscape(dgms, min_persistence=0.02):
     """
     Filters both H0 and H1 diagrams.
     """
@@ -996,10 +997,10 @@ def filter_dgms_for_landscape(dgms, min_persistence=0.02, max_pairs=1000):
     filtered_dgms = []
 
     for dim, dgm in enumerate(dgms):
+
         filtered = filter_dgm_for_landscape(
             dgm,
-            min_persistence=min_persistence,
-            max_pairs=max_pairs
+            min_persistence=min_persistence
         )
 
         print(f"H{dim} intervals after filtering:", len(filtered))
@@ -1012,8 +1013,6 @@ def filter_dgms_for_landscape(dgms, min_persistence=0.02, max_pairs=1000):
 def landscape_vector(
     dgms,
     hom_deg,
-    start=0,
-    stop=1,
     num_steps=100,
     num_layers=3
 ):
@@ -1031,8 +1030,6 @@ def landscape_vector(
     pl = PersLandscapeApprox(
         dgms=dgms,
         hom_deg=hom_deg,
-        start=start,
-        stop=stop,
         num_steps=num_steps
     )
 
@@ -1051,8 +1048,6 @@ def landscape_vector(
 
 def full_landscape_feature_vector(
     dgms,
-    start=0,
-    stop=1,
     num_steps=100,
     num_layers=3
 ):
@@ -1072,8 +1067,6 @@ def full_landscape_feature_vector(
     h0_vec = landscape_vector(
         dgms,
         hom_deg=0,
-        start=start,
-        stop=stop,
         num_steps=num_steps,
         num_layers=num_layers
     )
@@ -1081,8 +1074,6 @@ def full_landscape_feature_vector(
     h1_vec = landscape_vector(
         dgms,
         hom_deg=1,
-        start=start,
-        stop=stop,
         num_steps=num_steps,
         num_layers=num_layers
     )
@@ -1092,30 +1083,27 @@ def full_landscape_feature_vector(
 
 def persistence_landscape_from_ph(
     ph_array,
-    start=0,
-    stop=1,
     min_persistence=0.02,
-    max_pairs=1000,
     num_steps=100,
     num_layers=3
 ):
     """
-    Full helper that goes from raw Cripser output directly to a
+    Converts raw Cripser output directly into a
     persistence landscape feature vector.
     """
 
-    dgms = cripser_ph_to_dgms(ph_array, maxdim=1)
+    dgms = cripser_ph_to_dgms(
+        ph_array,
+        maxdim=1
+    )
 
     dgms_filtered = filter_dgms_for_landscape(
         dgms,
-        min_persistence=min_persistence,
-        max_pairs=max_pairs
+        min_persistence=min_persistence
     )
 
     feature_vec = full_landscape_feature_vector(
         dgms_filtered,
-        start=start,
-        stop=stop,
         num_steps=num_steps,
         num_layers=num_layers
     )
@@ -1123,35 +1111,876 @@ def persistence_landscape_from_ph(
     return feature_vec
 
 # -------------------------------------------------------------------
-# TEST ONE IMAGE WITHOUT PLOTTING
+# IMAGE TO LANDSCAPE VECTOR
+# -------------------------------------------------------------------
+
+def image_to_landscape_vector(
+    image_path,
+    min_persistence=0.02,
+    num_steps=100,
+    num_layers=3
+):
+    """
+    Convert one microscopy image into a persistence
+    landscape feature vector.
+
+    This initial classifier uses lower-star filtration.
+    """
+
+    # Preprocess image
+    img = preprocess_single(
+        image_path
+    )
+
+    # Compute lower-star persistent homology
+    ph_lower = compute_lower_star(
+        img
+    )
+
+    # Convert persistence into landscape vector
+    feature_vec = (
+        persistence_landscape_from_ph(
+            ph_lower,
+            min_persistence=min_persistence,
+            num_steps=num_steps,
+            num_layers=num_layers
+        )
+    )
+
+    return feature_vec
+
+# -------------------------------------------------------------------
+# BUILD MACHINE LEARNING DATASET
+# -------------------------------------------------------------------
+
+def build_landscape_dataset(
+    image_dir,
+    min_persistence=0.02,
+    num_steps=100,
+    num_layers=3
+):
+    """
+    Convert Control and Microgravity microscopy images
+    into a machine learning dataset.
+
+    Labels
+    ------
+    0 = Control
+    1 = Microgravity
+
+    Returns
+    -------
+    X : numpy.ndarray
+        Feature matrix.
+
+    y : numpy.ndarray
+        Class labels.
+
+    image_names : list
+        Image names corresponding to rows of X.
+    """
+
+    image_dir = Path(
+        image_dir
+    )
+
+    if not image_dir.exists():
+
+        raise FileNotFoundError(
+            f"Image directory does not exist: "
+            f"{image_dir}"
+        )
+
+    X = []
+    y = []
+    image_names = []
+
+    valid_extensions = {
+        ".tif",
+        ".tiff",
+        ".png",
+        ".jpg",
+        ".jpeg"
+    }
+
+    # Search folder and subfolders for images
+    image_paths = sorted(
+        path
+        for path in image_dir.rglob("*")
+        if (
+            path.is_file()
+            and path.suffix.lower() in valid_extensions
+            and "_processed" not in path.stem.lower()
+        )
+    )
+
+    print(
+        "Images found:",
+        len(image_paths)
+    )
+
+    for image_number, image_path in enumerate(
+        image_paths,
+        start=1
+    ):
+
+        # Use folder and filename to identify class
+        path_text = str(
+            image_path
+        ).lower()
+
+        if "control" in path_text:
+
+            label = 0
+
+        elif "microgravity" in path_text:
+
+            label = 1
+
+        else:
+
+            print(
+                f"\nSkipping {image_path.name}: "
+                f"class could not be determined."
+            )
+
+            continue
+
+        print(
+            "\n==================================="
+        )
+
+        print(
+            f"Image {image_number} "
+            f"of {len(image_paths)}"
+        )
+
+        print(
+            "Processing:",
+            image_path.name
+        )
+
+        if label == 0:
+
+            print(
+                "Class: Control"
+            )
+
+        else:
+
+            print(
+                "Class: Microgravity"
+            )
+
+        try:
+
+            feature_vec = (
+                image_to_landscape_vector(
+                    image_path,
+                    min_persistence=min_persistence,
+                    num_steps=num_steps,
+                    num_layers=num_layers
+                )
+            )
+
+            X.append(
+                feature_vec
+            )
+
+            y.append(
+                label
+            )
+
+            image_names.append(
+                image_path.name
+            )
+
+            print(
+                "Landscape vector shape:",
+                feature_vec.shape
+            )
+
+        except Exception as error:
+
+            print(
+                f"Could not process "
+                f"{image_path.name}"
+            )
+
+            print(
+                "Error:",
+                error
+            )
+
+    if len(X) == 0:
+
+        raise ValueError(
+            "No images were successfully "
+            "converted into feature vectors."
+        )
+
+    # Stack landscape vectors into feature matrix
+    X = np.vstack(
+        X
+    )
+
+    # Convert labels into NumPy array
+    y = np.asarray(
+        y
+    )
+
+    return (
+        X,
+        y,
+        image_names
+    )
+
+# -------------------------------------------------------------------
+# K-NEAREST NEIGHBORS CLASSIFICATION
+# -------------------------------------------------------------------
+
+def train_knn_classifier(
+    X,
+    y,
+    image_names,
+    n_neighbors=5,
+    test_size=0.2,
+    random_state=42
+):
+    """
+    Train and evaluate a K-Nearest Neighbors classifier.
+
+    Parameters
+    ----------
+    X : numpy.ndarray
+        Persistence landscape feature matrix.
+
+    y : numpy.ndarray
+        Class labels.
+
+    image_names : list
+        Image names corresponding to X.
+
+    n_neighbors : int, optional
+        Number of nearest neighbors.
+
+    test_size : float, optional
+        Proportion of images used for testing.
+
+    random_state : int, optional
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    KNeighborsClassifier
+        Trained KNN classifier.
+    """
+
+    # Count images in each class
+    classes, class_counts = np.unique(
+        y,
+        return_counts=True
+    )
+
+    print(
+        "\nCLASS COUNTS"
+    )
+
+    print(
+        "-----------------------------------"
+    )
+
+    for class_label, count in zip(
+        classes,
+        class_counts
+    ):
+
+        if class_label == 0:
+
+            class_name = "Control"
+
+        else:
+
+            class_name = "Microgravity"
+
+        print(
+            f"{class_name}: {count}"
+        )
+
+    # Make sure both classes exist
+    if len(classes) < 2:
+
+        raise ValueError(
+            "KNN classification requires both "
+            "Control and Microgravity images."
+        )
+
+    # Make sure stratified split is possible
+    if class_counts.min() < 2:
+
+        raise ValueError(
+            "Each class needs at least two images "
+            "for a stratified train/test split."
+        )
+
+    # Split feature vectors into training and testing data
+    (
+        X_train,
+        X_test,
+        y_train,
+        y_test,
+        names_train,
+        names_test
+    ) = train_test_split(
+        X,
+        y,
+        image_names,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=y
+    )
+
+    print(
+        "\nTRAIN / TEST INFORMATION"
+    )
+
+    print(
+        "-----------------------------------"
+    )
+
+    print(
+        "Training samples:",
+        X_train.shape[0]
+    )
+
+    print(
+        "Testing samples:",
+        X_test.shape[0]
+    )
+
+    print(
+        "Features per image:",
+        X_train.shape[1]
+    )
+
+    # Make sure k is not larger than training set
+    if n_neighbors > X_train.shape[0]:
+
+        raise ValueError(
+            f"n_neighbors={n_neighbors} is larger "
+            f"than the number of training images "
+            f"({X_train.shape[0]})."
+        )
+
+    # Create KNN classifier
+    knn = KNeighborsClassifier(
+        n_neighbors=n_neighbors,
+        metric="euclidean"
+    )
+
+    # Train KNN
+    knn.fit(
+        X_train,
+        y_train
+    )
+
+    # Predict test image labels
+    y_pred = knn.predict(
+        X_test
+    )
+
+    # Calculate accuracy
+    accuracy = accuracy_score(
+        y_test,
+        y_pred
+    )
+
+    # Calculate weighted F1 score
+    f1 = f1_score(
+        y_test,
+        y_pred,
+        average="weighted"
+    )
+
+    print(
+        "\nKNN RESULTS"
+    )
+
+    print(
+        "-----------------------------------"
+    )
+
+    print(
+        "Number of neighbors:",
+        n_neighbors
+    )
+
+    print(
+        "Accuracy:",
+        accuracy
+    )
+
+    print(
+        "Weighted F1 Score:",
+        f1
+    )
+
+    label_names = {
+        0: "Control",
+        1: "Microgravity"
+    }
+
+    print(
+        "\nINDIVIDUAL TEST PREDICTIONS"
+    )
+
+    print(
+        "-----------------------------------"
+    )
+
+    for (
+        image_name,
+        true_label,
+        predicted_label
+    ) in zip(
+        names_test,
+        y_test,
+        y_pred
+    ):
+
+        print(
+            "\nImage:",
+            image_name
+        )
+
+        print(
+            "Actual:",
+            label_names[true_label]
+        )
+
+        print(
+            "Predicted:",
+            label_names[predicted_label]
+        )
+
+        if true_label == predicted_label:
+
+            print(
+                "Result: Correct"
+            )
+
+        else:
+
+            print(
+                "Result: Incorrect"
+            )
+
+    # Display confusion matrix
+    ConfusionMatrixDisplay.from_predictions(
+        y_test,
+        y_pred,
+        labels=[
+            0,
+            1
+        ],
+        display_labels=[
+            "Control",
+            "Microgravity"
+        ]
+    )
+
+    plt.title(
+        "KNN Confusion Matrix"
+    )
+
+    plt.tight_layout()
+
+    plt.show()
+
+    return knn
+
+def plot_pca_components(
+    pca_output,
+    pca,
+    x_component=1,
+    y_component=2
+):
+    """
+    Plot any two of the first five PCA components.
+
+    Parameters
+    ----------
+    pca_output : pandas.DataFrame
+        Table containing image PCA coordinates.
+
+    pca : sklearn.decomposition.PCA
+        Fitted PCA model.
+
+    x_component : int
+        PCA component used for the x-axis.
+
+    y_component : int
+        PCA component used for the y-axis.
+    """
+
+    # Validate requested components
+    if x_component < 1 or x_component > 5:
+        raise ValueError(
+            "x_component must be between 1 and 5."
+        )
+
+    if y_component < 1 or y_component > 5:
+        raise ValueError(
+            "y_component must be between 1 and 5."
+        )
+
+    if x_component == y_component:
+        raise ValueError(
+            "Choose two different PCA components."
+        )
+
+
+    x_column = f"PC{x_component}"
+
+    y_column = f"PC{y_component}"
+
+
+    colors = {
+        "Control": "#1f77b4",
+        "Microgravity": "#d62728"
+    }
+
+
+    markers = {
+        "Control": "o",
+        "Microgravity": "s"
+    }
+
+
+    plt.figure(
+        figsize=(11, 8)
+    )
+
+
+    # Plot by true and predicted label
+    for true_label in [
+        "Control",
+        "Microgravity"
+    ]:
+
+        for predicted_label in [
+            "Control",
+            "Microgravity"
+        ]:
+
+            mask = (
+                (
+                    pca_output["True_Label"]
+                    == true_label
+                )
+                &
+                (
+                    pca_output["Predicted_Label"]
+                    == predicted_label
+                )
+            )
+
+
+            if mask.sum() > 0:
+
+                label = (
+                    f"True {true_label} | "
+                    f"Predicted {predicted_label}"
+                )
+
+
+                plt.scatter(
+                    pca_output.loc[
+                        mask,
+                        x_column
+                    ],
+
+                    pca_output.loc[
+                        mask,
+                        y_column
+                    ],
+
+                    c=colors[
+                        predicted_label
+                    ],
+
+                    marker=markers[
+                        true_label
+                    ],
+
+                    s=100,
+
+                    edgecolors="black",
+
+                    alpha=0.8,
+
+                    label=label
+                )
+
+
+    x_variance = (
+        pca.explained_variance_ratio_[
+            x_component - 1
+        ]
+        * 100
+    )
+
+
+    y_variance = (
+        pca.explained_variance_ratio_[
+            y_component - 1
+        ]
+        * 100
+    )
+
+
+    plt.title(
+        f"{x_column} vs {y_column} of "
+        f"Persistence Landscape Vectors"
+    )
+
+
+    plt.xlabel(
+        f"{x_column} "
+        f"({x_variance:.1f}%)"
+    )
+
+
+    plt.ylabel(
+        f"{y_column} "
+        f"({y_variance:.1f}%)"
+    )
+
+
+    plt.grid(
+        True,
+        linestyle="--",
+        alpha=0.5
+    )
+
+
+    plt.legend(
+        bbox_to_anchor=(1.05, 1),
+        loc="upper left"
+    )
+
+
+    plt.tight_layout()
+
+    plt.show()
+
+# -------------------------------------------------------------------
+# RUN LOWER-STAR + LANDSCAPE + KNN PIPELINE
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
 
-    image_path = r"C:\Users\g_gar\OneDrive - Simpson College\BryanSummer\Control_Stub4_0000 .tif"
+    # Folder containing Control and Microgravity images
+    image_dir = Path(
+        r"C:\Users\g_gar\OneDrive - Simpson College\BryanSummer\Images"
+    )
 
-    print("Preprocessing one image...")
-    img = preprocess_single(image_path)
+    print(
+        "BUILDING PERSISTENCE LANDSCAPE DATASET"
+    )
 
-    print("Image shape:", img.shape)
-    print("Image min:", img.min())
-    print("Image max:", img.max())
+    print(
+        "==================================="
+    )
 
-    print("\nComputing lower-star persistence...")
-    ph_lower = compute_lower_star(img)
-
-    print("\nCreating persistence landscape vector...")
-
-    landscape_vec = persistence_landscape_from_ph(
-        ph_lower,
-        start=0,
-        stop=1,
-        min_persistence=0.02,
-        max_pairs=1000,
+    # Convert every image into a persistence landscape vector
+    X, y, image_names = build_landscape_dataset(
+        image_dir,
+        min_persistence=0.005,
         num_steps=100,
         num_layers=3
     )
 
-    print("Landscape vector shape:", landscape_vec.shape)
-    print("First 20 values:")
-    print(landscape_vec[:20])
+    print(
+        "\nDATASET INFORMATION"
+    )
+
+    print(
+        "==================================="
+    )
+
+    print(
+        "Feature matrix shape:",
+        X.shape
+    )
+
+    print(
+        "Label vector shape:",
+        y.shape
+    )
+
+    print(
+        "Number of Control images:",
+        np.sum(y == 0)
+    )
+
+    print(
+        "Number of Microgravity images:",
+        np.sum(y == 1)
+    )
+
+    print(
+        "\nTRAINING KNN CLASSIFIER"
+    )
+
+    print(
+        "==================================="
+    )
+
+    # Train and evaluate KNN
+    knn = train_knn_classifier(
+        X,
+        y,
+        image_names,
+        n_neighbors=5,
+        test_size=0.2,
+        random_state=42
+    )
+
+    # -------------------------------------------------------------------
+# PCA VISUALIZATION SPACE
+# -------------------------------------------------------------------
+
+    print(
+    "\nGENERATING PCA VISUALIZATION SPACE"
+    )
+
+    print(
+    "==================================="
+    )
+
+    # Scale persistence landscape features
+    scaler = StandardScaler()
+
+    X_scaled = scaler.fit_transform(
+        X
+        )
+
+    # Compute the first five principal components
+    pca = PCA(
+        n_components=5
+        )
+
+    X_pca = pca.fit_transform(
+        X_scaled
+        )
+
+    # Get KNN predictions for all images
+    y_pred = knn.predict(
+        X
+        )
+
+    # Convert numeric labels to class names
+    label_names = {
+        0: "Control",
+        1: "Microgravity"
+        }
+
+
+    # Create PCA output table
+    pca_output = pd.DataFrame({
+        "Image": image_names,
+
+        "True_Label": [
+            label_names[label]
+            for label in y
+            ],
+        
+        "Predicted_Label": [
+            label_names[label]
+            for label in y_pred
+            ],
+
+        "PC1": X_pca[:, 0],
+        "PC2": X_pca[:, 1],
+        "PC3": X_pca[:, 2],
+        "PC4": X_pca[:, 3],
+        "PC5": X_pca[:, 4]
+    })
+
+
+    # Save PCA coordinates
+    pca_output.to_csv(
+        "PCA_First_Five_Components.csv",
+        index=False
+    )
+    
+    # Save explained variance for each PCA component
+    variance_output = pd.DataFrame({
+        "Component": [
+            "PC1",
+            "PC2",
+            "PC3",
+            "PC4",
+            "PC5"
+        ],
+
+        "Explained_Variance": (
+            pca.explained_variance_ratio_
+            * 100
+        )
+    })
+
+
+    variance_output.to_csv(
+        "PCA_Explained_Variance.csv",
+        index=False
+    )
+    
+    print(
+        "\nPCA OUTPUT SAVED"
+    )
+    
+    print(
+        "PCA_First_Five_Components.csv"
+    )
+    
+    
+    # Print explained variance
+    print(
+        "\nPCA EXPLAINED VARIANCE"
+    )
+    
+    print(
+        "==================================="
+    )
+    
+    for component_number, variance in enumerate(
+        pca.explained_variance_ratio_,
+        start=1
+    ):
+    
+        print(
+            f"PC{component_number}: "
+            f"{variance * 100:.2f}%"
+        )
+    
+    
+    print(
+        "\nTotal variance explained by "
+        "first five components:"
+    )
+    
+    print(
+        f"{pca.explained_variance_ratio_.sum() * 100:.2f}%"
+    )
+
+    # Plot selected PCA components
+    plot_pca_components(
+        pca_output,
+        pca,
+        x_component=1,
+        y_component=2
+    )
+    
+# Rerun, save first five components so that no matter which comgination we want to see, i can just pull up the output and plot those too
