@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Integrated Upper-Star Topological Data Analysis & Machine Learning Pipeline
+Integrated Lower-Star Topological Data Analysis & Machine Learning Pipeline
 
-This script performs the complete upper-star pipeline directly on your preprocessed folder:
-1. Loads preprocessed target images (*_processed.tif).
-2. Computes raw upper-star persistent homology by inverting the image intensity 
-   (converting upper-star to lower-star cubical filtration) and running Cripser.
-3. Saves raw persistence diagrams (*_upper_star_diagram.npy).
-4. Summarizes raw diagrams into a unified 10D barcode feature vector.
-5. Evaluates classification via Linear SVM, RBF SVM, and an MLP Neural Network.
+This script performs the complete pipeline directly on your preprocessed folder:
+1. Computes raw lower-star persistent homology via Cripser for all processed images.
+2. Saves raw persistence diagrams (.npy matrices).
+3. Summarizes raw diagrams into a 10-dimensional barcode feature vector.
+4. Evaluates classification performance using Linear SVM, RBF SVM, and an MLP Network.
 """
 
 import os
@@ -39,14 +37,13 @@ os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 plt.ion()
 
 # =====================================================================
-# 1. CRIPSER UPPER-STAR PERSISTENT HOMOLOGY
+# 1. CRIPSER LOWER-STAR PERSISTENT HOMOLOGY
 # =====================================================================
 
-def compute_upper_star_ph(images_paths, output_dir):
+def compute_lower_star_ph(images_paths, output_dir):
     """
-    Computes raw upper-star persistent homology via Cripser for a list of images.
-    Upper-star filtration is computed by inverting the image intensity domain 
-    (mapping x -> max - x) and calculating standard lower-star cubical homology.
+    Computes raw lower-star persistent homology via Cripser for a list of images
+    and saves each raw persistence diagram matrix as a separate .npy file.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -54,38 +51,36 @@ def compute_upper_star_ph(images_paths, output_dir):
     
     for path in images_paths:
         path = Path(path)
-        print(f"Computing Upper-Star PH for: {path.name}")
+        print(f"Computing Lower-Star PH for: {path.name}")
         
         # Load the preprocessed image
         img = img_as_float(io.imread(path, as_gray=True))
         
-        # Scale to standard 0-255 domain for numerical stability
+        # Scale to standard 0-255 domain for numerical stability in Cripser
         if img.max() <= 1.0:
             img = img * 255.0
             
-        # Invert the image to transform upper-star filtration into a lower-star filtration
-        img_inverted = 255.0 - img
-        img_input = np.asarray(img_inverted, dtype=np.float64)
+        img_input = np.asarray(img, dtype=np.float64)
         
-        # Compute Persistent Homology
+        # Compute Persistent Homology (Lower-star cubical filtration)
         ph_diagram = cr.computePH(img_input) if hasattr(cr, "computePH") else cr.compute_ph(img_input)
         
-        # Save the raw persistence diagram matrix [dim, birth, death]
-        save_path = output_dir / f"{path.stem}_upper_star_diagram.npy"
+        # Save the raw persistence diagram matrix [dim, birth, death] for this specific image
+        save_path = output_dir / f"{path.stem}_lower_star_diagram.npy"
         np.save(save_path, ph_diagram)
         diagram_paths.append(save_path)
         
-    print(f"\n✅ All upper-star persistence diagrams saved to: {output_dir}")
+    print(f"\n✅ All lower-star persistence diagrams saved to: {output_dir}")
     return sorted(diagram_paths)
 
 # =====================================================================
-# 2. BARCODE VECTORIZATION (FROM RAW UPPER-STAR DIAGRAMS)
+# 2. BARCODE VECTORIZATION (FROM RAW LOWER-STAR DIAGRAMS)
 # =====================================================================
 
-def vectorize_upper_star_diagrams(diagram_paths):
+def vectorize_persistence_diagrams(diagram_paths):
     """
-    Loads raw upper-star persistence diagrams (.npy files) and summarizes 
-    their topological features into a 10-dimensional barcode vector.
+    Loads raw persistence diagrams (.npy files) and summarizes their 
+    topological features into a 10-dimensional barcode vector.
     """
     vectorized_features = []
     y_labels = []
@@ -93,7 +88,7 @@ def vectorize_upper_star_diagrams(diagram_paths):
     for path in diagram_paths:
         path = Path(path)
         
-        # Load the raw upper-star [dim, birth, death] array
+        # Load the raw [dim, birth, death] array
         ph = np.load(path)
         
         # Filter out infinite topological features
@@ -132,7 +127,7 @@ def vectorize_upper_star_diagrams(diagram_paths):
 # 3. MACHINE LEARNING BENCHMARKS & EVALUATION
 # =====================================================================
 
-def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Upper-Star Barcode Experiment"):
+def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Microscopy Dataset"):
     """Trains and compares Linear SVM, RBF SVM, and an MLP Neural Network using 10D features."""
     names = [
         "Linear SVM",
@@ -224,7 +219,7 @@ def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Upper-Star Barcode Exp
 
     # Save metrics table
     df_metrics = pd.DataFrame(metrics_records)
-    csv_path = Path(output_dir) / "microgravity_upper_star_ml_metrics.csv"
+    csv_path = Path(output_dir) / "microgravity_lower_star_ml_metrics.csv"
     df_metrics.to_csv(csv_path, index=False)
     
     print("\n📊 --- MACHINE LEARNING BENCHMARK PERFORMANCE ---")
@@ -249,21 +244,21 @@ if __name__ == '__main__':
        
     print(f"Found {len(processed_paths)} preprocessed images to process.")
 
-    # Phase 1: Execute upper-star TDA computation over target images
-    print("\n=== Phase 1: Running Upper-Star Homology Extraction ===")
-    saved_diagrams = compute_upper_star_ph(images_paths=processed_paths, output_dir=PROCESSED_DIR)
+    # Phase 1: Execute lower-star TDA computation over target images
+    print("\n=== Phase 1: Running Lower-Star Homology Extraction ===")
+    saved_diagrams = compute_lower_star_ph(images_paths=processed_paths, output_dir=PROCESSED_DIR)
 
     # Phase 2: Vectorize the barcode diagrams into features and targets
     print("\n=== Phase 2: Starting Vectorization ===")
-    X_topological_features, y_experimental_classes = vectorize_upper_star_diagrams(saved_diagrams)
+    X_topological_features, y_experimental_classes = vectorize_persistence_diagrams(saved_diagrams)
     
     # Save the extracted 10D feature matrices for record-keeping
-    np.save(PROCESSED_DIR / "step2_upper_star_10d_features.npy", X_topological_features)
-    np.save(PROCESSED_DIR / "step2_upper_star_labels.npy", y_experimental_classes)
-    print("✅ Vectorized 10D upper-star arrays cached to disk.")
+    np.save(PROCESSED_DIR / "step2_lower_star_10d_features.npy", X_topological_features)
+    np.save(PROCESSED_DIR / "step2_lower_star_labels.npy", y_experimental_classes)
+    print("✅ Vectorized 10D arrays cached to disk.")
 
     # Phase 3: Execute Machine Learning Comparison
-    print("\n=== Phase 3: Running Support Vector Machines & Neural Network (Upper-Star) ===")
+    print("\n=== Phase 3: Running Support Vector Machines & Neural Network ===")
     print(f"Dataset Dimensions: {X_topological_features.shape}")
     
     if len(X_topological_features) < 5:
@@ -273,5 +268,5 @@ if __name__ == '__main__':
             X_tda=X_topological_features, 
             y=y_experimental_classes, 
             output_dir=PROCESSED_DIR, 
-            dataset_title="Upper-Star Barcode Machine Learning"
+            dataset_title="Lower-Star Barcode Machine Learning"
         )

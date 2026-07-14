@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Integrated Upper-Star Topological Data Analysis & Machine Learning Pipeline
+Integrated Density TDA & Machine Learning Pipeline
 
-This script performs the complete upper-star pipeline directly on your preprocessed folder:
+This script performs the complete density experiment directly on your preprocessed folder:
 1. Loads preprocessed target images (*_processed.tif).
-2. Computes raw upper-star persistent homology by inverting the image intensity 
-   (converting upper-star to lower-star cubical filtration) and running Cripser.
-3. Saves raw persistence diagrams (*_upper_star_diagram.npy).
-4. Summarizes raw diagrams into a unified 10D barcode feature vector.
-5. Evaluates classification via Linear SVM, RBF SVM, and an MLP Neural Network.
+2. Converts images to binary using an automated Otsu global threshold.
+3. Computes local pixel density filtration using a SciPy KDTree.
+4. Computes raw density persistent homology via Cripser and saves .npy arrays.
+5. Summarizes raw diagrams into a unified 10D barcode feature vector.
+6. Evaluates classification via Linear SVM, RBF SVM, and an MLP Neural Network.
 """
 
 import os
@@ -18,11 +18,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import cripser as cr
+from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 import matplotlib.cm as mcm
 from matplotlib.colors import ListedColormap
 
-from skimage import io
+from skimage import io, filters
 from skimage.util import img_as_float
 
 from sklearn.decomposition import PCA
@@ -39,100 +40,102 @@ os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 plt.ion()
 
 # =====================================================================
-# 1. CRIPSER UPPER-STAR PERSISTENT HOMOLOGY
+# 1. DENSITY FILTRATION & TDA FUNCTIONS
 # =====================================================================
 
-def compute_upper_star_ph(images_paths, output_dir):
+def density_filtration(binary_image, max_dist=5):
     """
-    Computes raw upper-star persistent homology via Cripser for a list of images.
-    Upper-star filtration is computed by inverting the image intensity domain 
-    (mapping x -> max - x) and calculating standard lower-star cubical homology.
+    Generate a density-based filtration from a binary image.
+    Local pixel density is calculated by counting foreground pixels within a specified radius.
+    Dense regions receive lower filtration values and appear earlier.
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    diagram_paths = []
-    
-    for path in images_paths:
-        path = Path(path)
-        print(f"Computing Upper-Star PH for: {path.name}")
-        
-        # Load the preprocessed image
-        img = img_as_float(io.imread(path, as_gray=True))
-        
-        # Scale to standard 0-255 domain for numerical stability
-        if img.max() <= 1.0:
-            img = img * 255.0
-            
-        # Invert the image to transform upper-star filtration into a lower-star filtration
-        img_inverted = 255.0 - img
-        img_input = np.asarray(img_inverted, dtype=np.float64)
-        
-        # Compute Persistent Homology
-        ph_diagram = cr.computePH(img_input) if hasattr(cr, "computePH") else cr.compute_ph(img_input)
-        
-        # Save the raw persistence diagram matrix [dim, birth, death]
-        save_path = output_dir / f"{path.stem}_upper_star_diagram.npy"
-        np.save(save_path, ph_diagram)
-        diagram_paths.append(save_path)
-        
-    print(f"\n✅ All upper-star persistence diagrams saved to: {output_dir}")
-    return sorted(diagram_paths)
+    height, width = binary_image.shape
+    # Find foreground pixel coordinates
+    points = np.argwhere(binary_image)
+
+    # Build neighborhood tree
+    tree = KDTree(points, leaf_size=30, metric="euclidean")
+   
+    point_cloud = np.zeros((height * width, 2))
+   
+    p = 0
+    for i in range(height):
+        for j in range(width):
+            point_cloud[p, 0] = i
+            point_cloud[p, 1] = j
+            p += 1
+
+    # Coordinates for every pixel
+    num_nbhs = tree.query_radius(
+        point_cloud,
+        r=max_dist,
+        count_only=True
+    )
+
+    filt_func_vals = num_nbhs
+
+    # Maximum number of pixels possible in neighborhood
+    max_num_nbhs = filt_func_vals.max()
+
+    # Convert density into filtration values
+    filt_func_vals = max_num_nbhs - filt_func_vals
+
+    # Reshape back into image
+    density_filt_img = filt_func_vals.reshape(height, width)
+
+    return density_filt_img
+
+
+def compute_density_ph(binary_image, max_dist=5):
+    """Compute persistent homology using density filtration via Cripser."""
+    density_img = density_filtration(binary_image, max_dist)
+
+    # Adapt dynamically to whichever syntax your cripser build expects
+    if hasattr(cr, "computePH"):
+        ph_density = cr.computePH(density_img.astype(np.float64))
+    else:
+        ph_density = cr.compute_ph(density_img.astype(np.float64))
+
+    return density_img, ph_density
 
 # =====================================================================
-# 2. BARCODE VECTORIZATION (FROM RAW UPPER-STAR DIAGRAMS)
+# 2. BARCODE VECTORIZATION
 # =====================================================================
 
-def vectorize_upper_star_diagrams(diagram_paths):
+def extract_10d_barcode(ph_diagram):
     """
-    Loads raw upper-star persistence diagrams (.npy files) and summarizes 
+    Loads raw density persistence diagrams and summarizes 
     their topological features into a 10-dimensional barcode vector.
     """
-    vectorized_features = []
-    y_labels = []
+    # Filter out infinite topological features
+    finite_mask = np.isfinite(ph_diagram[:, 2])
+    ph_finite = ph_diagram[finite_mask]
     
-    for path in diagram_paths:
-        path = Path(path)
+    births = ph_finite[:, 1]
+    deaths = ph_finite[:, 2]
+    persistence = deaths - births
+    
+    if len(persistence) == 0:
+        return np.zeros(10)
         
-        # Load the raw upper-star [dim, birth, death] array
-        ph = np.load(path)
-        
-        # Filter out infinite topological features
-        finite_mask = np.isfinite(ph[:, 2])
-        ph_finite = ph[finite_mask]
-        
-        births = ph_finite[:, 1]
-        deaths = ph_finite[:, 2]
-        persistence = deaths - births
-        
-        if len(persistence) == 0:
-            summary_vector = np.zeros(10)
-        else:
-            summary_vector = np.array([
-                np.mean(births),       # 1. Mean birth time
-                np.std(births),        # 2. Birth standard deviation
-                np.median(births),     # 3. Median birth time
-                np.max(births),        # 4. Maximum birth time
-                np.mean(deaths),       # 5. Mean death time
-                np.std(deaths),        # 6. Death standard deviation
-                np.max(deaths),        # 7. Maximum death time
-                np.mean(persistence),  # 8. Mean feature lifetime
-                np.std(persistence),   # 9. Lifetime standard deviation
-                np.sum(persistence)    # 10. Total persistent mass
-            ])
-            
-        vectorized_features.append(summary_vector)
-        
-        # Label mapping: 1 for microgravity, 0 otherwise (control)
-        label = 1 if "microgravity" in path.name.lower() else 0
-        y_labels.append(label)
-        
-    return np.array(vectorized_features), np.array(y_labels)
+    return np.array([
+        np.mean(births),       # 1. Mean birth time
+        np.std(births),        # 2. Birth standard deviation
+        np.median(births),     # 3. Median birth time
+        np.max(births),        # 4. Maximum birth time
+        np.mean(deaths),       # 5. Mean death time
+        np.std(deaths),        # 6. Death standard deviation
+        np.max(deaths),        # 7. Maximum death time
+        np.mean(persistence),  # 8. Mean feature lifetime
+        np.std(persistence),   # 9. Lifetime standard deviation
+        np.sum(persistence)    # 10. Total persistent mass
+    ])
 
 # =====================================================================
 # 3. MACHINE LEARNING BENCHMARKS & EVALUATION
 # =====================================================================
 
-def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Upper-Star Barcode Experiment"):
+def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Density Barcode Experiment"):
     """Trains and compares Linear SVM, RBF SVM, and an MLP Neural Network using 10D features."""
     names = [
         "Linear SVM",
@@ -224,7 +227,7 @@ def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Upper-Star Barcode Exp
 
     # Save metrics table
     df_metrics = pd.DataFrame(metrics_records)
-    csv_path = Path(output_dir) / "microgravity_upper_star_ml_metrics.csv"
+    csv_path = Path(output_dir) / "microgravity_density_ml_metrics.csv"
     df_metrics.to_csv(csv_path, index=False)
     
     print("\n📊 --- MACHINE LEARNING BENCHMARK PERFORMANCE ---")
@@ -248,22 +251,48 @@ if __name__ == '__main__':
         raise FileNotFoundError(f"Could not find any processed images in: {PROCESSED_DIR}.")
        
     print(f"Found {len(processed_paths)} preprocessed images to process.")
+    print("\n=== Phase 1: Running Density Filtration & Homology Extraction ===")
+    
+    X_topological_features = []
+    y_experimental_classes = []
 
-    # Phase 1: Execute upper-star TDA computation over target images
-    print("\n=== Phase 1: Running Upper-Star Homology Extraction ===")
-    saved_diagrams = compute_upper_star_ph(images_paths=processed_paths, output_dir=PROCESSED_DIR)
+    for path in processed_paths:
+        path = Path(path)
+        print(f"Processing Density TDA for: {path.name}")
+        
+        # 1. Load preprocessed image as grayscale float
+        img_grayscale = img_as_float(io.imread(path, as_gray=True))
+        
+        # 2. Binarize using an automated Otsu global threshold
+        thresh_val = filters.threshold_otsu(img_grayscale)
+        binary_img = img_grayscale > thresh_val
+        
+        # 3. Compute the custom density filtration and persistent homology diagram
+        density_img, ph_diagram = compute_density_ph(binary_img, max_dist=5)
+        
+        # 4. Save the raw persistence diagram matrix [dim, birth, death]
+        save_path = PROCESSED_DIR / f"{path.stem}_density_diagram.npy"
+        np.save(save_path, ph_diagram)
+        
+        # 5. Summarize into the 10-dimensional barcode feature vector
+        feature_vector = extract_10d_barcode(ph_diagram)
+        X_topological_features.append(feature_vector)
+        
+        # 6. Binary Labeling (1 for microgravity, 0 for control)
+        label = 1 if "microgravity" in path.name.lower() else 0
+        y_experimental_classes.append(label)
+        
+    print(f"\n✅ All raw density persistence diagrams saved to disk.")
 
-    # Phase 2: Vectorize the barcode diagrams into features and targets
-    print("\n=== Phase 2: Starting Vectorization ===")
-    X_topological_features, y_experimental_classes = vectorize_upper_star_diagrams(saved_diagrams)
+    # Phase 2: Array Cache and ML Benchmarking
+    print("\n=== Phase 2: Running Support Vector Machines & Neural Network (Density) ===")
+    X_topological_features = np.array(X_topological_features)
+    y_experimental_classes = np.array(y_experimental_classes)
     
     # Save the extracted 10D feature matrices for record-keeping
-    np.save(PROCESSED_DIR / "step2_upper_star_10d_features.npy", X_topological_features)
-    np.save(PROCESSED_DIR / "step2_upper_star_labels.npy", y_experimental_classes)
-    print("✅ Vectorized 10D upper-star arrays cached to disk.")
-
-    # Phase 3: Execute Machine Learning Comparison
-    print("\n=== Phase 3: Running Support Vector Machines & Neural Network (Upper-Star) ===")
+    np.save(PROCESSED_DIR / "step2_density_10d_features.npy", X_topological_features)
+    np.save(PROCESSED_DIR / "step2_density_labels.npy", y_experimental_classes)
+    print("✅ Vectorized 10D density arrays cached to disk.")
     print(f"Dataset Dimensions: {X_topological_features.shape}")
     
     if len(X_topological_features) < 5:
@@ -273,5 +302,5 @@ if __name__ == '__main__':
             X_tda=X_topological_features, 
             y=y_experimental_classes, 
             output_dir=PROCESSED_DIR, 
-            dataset_title="Upper-Star Barcode Machine Learning"
+            dataset_title="Density Barcode Machine Learning Experiment"
         )
