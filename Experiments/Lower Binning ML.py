@@ -1051,7 +1051,6 @@ def run_ml_benchmark(
         "============================================"
     )
 
-
     print(
         df_metrics.to_string(
             index=False
