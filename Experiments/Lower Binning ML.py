@@ -1,16 +1,29 @@
 # -*- coding: utf-8 -*-
-import copy
+"""
+Lower-Star Persistence Binning Machine Learning Experiment
+
+Pipeline:
+    1. Load preprocessed microscopy images
+    2. Compute lower-star persistent homology
+    3. Apply persistence binning
+    4. Build an 18-dimensional feature vector for each image
+    5. Train a Linear SVM
+    6. Train a Neural Network
+    7. Calculate accuracy, F1 score, and confusion matrices
+
+@author: Gabriel
+"""
+
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as mcm
 
-from matplotlib.colors import ListedColormap
+import cripser
 
-from sklearn.decomposition import PCA
-from sklearn.inspection import DecisionBoundaryDisplay
+from skimage import io
+from skimage.util import img_as_float
 
 from sklearn.metrics import (
     accuracy_score,
@@ -30,21 +43,74 @@ from sklearn.svm import SVC
 # 1. EXPERIMENT SETTINGS
 # =====================================================================
 
+# Number of bins along the birth and persistence axes
 N_BINS = 3
 
+
+# Images are scaled to 0-255 before persistent homology
 BIRTH_RANGE = (
     0.0,
     255.0
 )
+
 
 PERSISTENCE_RANGE = (
     0.0,
     255.0
 )
 
+# =====================================================================
+# 2. LOWER-STAR PERSISTENT HOMOLOGY
+# =====================================================================
+
+def compute_lower_star(preprocessed_img):
+    """
+    Compute a lower-star persistence diagram from a
+    preprocessed grayscale image.
+
+    In a lower-star filtration, lower-intensity pixels enter
+    the filtration before higher-intensity pixels.
+
+    Parameters
+    ----------
+    preprocessed_img : numpy.ndarray
+        Preprocessed grayscale image.
+
+    Returns
+    -------
+    numpy.ndarray
+        Raw Cripser persistence diagram containing:
+
+            [dimension, birth, death]
+    """
+
+    # ---------------------------------------------------------------
+    # COMPUTE LOWER-STAR PERSISTENT HOMOLOGY
+    # ---------------------------------------------------------------
+
+    if hasattr(
+        cripser,
+        "compute_ph"
+    ):
+
+        ph_lower = cripser.compute_ph(
+            preprocessed_img.astype(float),
+            maxdim=1
+        )
+
+    else:
+
+        ph_lower = cripser.computePH(
+            preprocessed_img.astype(float),
+            maxdim=1
+        )
+
+
+    return ph_lower
+
 
 # =====================================================================
-# 2. PERSISTENCE BINNING
+# 3. PERSISTENCE BINNING
 # =====================================================================
 
 def build_persistence_binning_vector(
@@ -57,11 +123,11 @@ def build_persistence_binning_vector(
     Convert H0 and H1 persistence diagrams into one fixed-length
     persistence-binning feature vector.
 
-    Each persistence diagram is transformed from:
+    Each persistence point is transformed from:
 
         (birth, death)
 
-    into:
+    to:
 
         (birth, persistence)
 
@@ -69,25 +135,23 @@ def build_persistence_binning_vector(
 
         persistence = death - birth
 
-    A two-dimensional histogram is then constructed over the
+    A two-dimensional histogram is constructed over the
     birth-persistence plane.
 
     Each persistence point contributes its persistence value as the
-    weight of the bin containing that point. Therefore, longer-lived
-    topological features contribute more strongly than short-lived
-    features.
+    weight of the bin containing that point.
 
     H0 and H1 are binned separately and then concatenated.
 
     Parameters
     ----------
     persistence_diagrams : list
-        List containing two persistence diagrams:
+        List containing:
 
             persistence_diagrams[0] = H0 diagram
             persistence_diagrams[1] = H1 diagram
 
-        Each diagram must contain columns:
+        Each diagram contains:
 
             [birth, death]
 
@@ -114,21 +178,24 @@ def build_persistence_binning_vector(
             Total = 18 features
     """
 
-    # Create bin edges for birth values
+    # ---------------------------------------------------------------
+    # CREATE BIN EDGES
+    # ---------------------------------------------------------------
+
     birth_bins = np.linspace(
         birth_range[0],
         birth_range[1],
         n_bins + 1
     )
 
-    # Create bin edges for persistence values
+
     persistence_bins = np.linspace(
         persistence_range[0],
         persistence_range[1],
         n_bins + 1
     )
 
-    # Store the flattened H0 and H1 bin matrices
+
     feature_blocks = []
 
 
@@ -136,11 +203,10 @@ def build_persistence_binning_vector(
     # PROCESS H0 AND H1 SEPARATELY
     # ---------------------------------------------------------------
 
-    for pd in persistence_diagrams:
+    for diagram in persistence_diagrams:
 
-        # Convert to NumPy array
         pd = np.asarray(
-            pd,
+            diagram,
             dtype=np.float64
         )
 
@@ -151,7 +217,6 @@ def build_persistence_binning_vector(
 
         if pd.size == 0:
 
-            # Empty diagram produces an all-zero bin matrix
             bin_matrix = np.zeros(
                 (
                     n_bins,
@@ -160,9 +225,11 @@ def build_persistence_binning_vector(
                 dtype=np.float64
             )
 
+
             feature_blocks.append(
                 bin_matrix.flatten()
             )
+
 
             continue
 
@@ -172,10 +239,15 @@ def build_persistence_binning_vector(
         # -----------------------------------------------------------
 
         finite_mask = (
-            np.isfinite(pd[:, 0])
+            np.isfinite(
+                pd[:, 0]
+            )
             &
-            np.isfinite(pd[:, 1])
+            np.isfinite(
+                pd[:, 1]
+            )
         )
+
 
         pd_finite = pd[
             finite_mask
@@ -186,7 +258,9 @@ def build_persistence_binning_vector(
         # HANDLE DIAGRAM WITH NO FINITE FEATURES
         # -----------------------------------------------------------
 
-        if len(pd_finite) == 0:
+        if len(
+            pd_finite
+        ) == 0:
 
             bin_matrix = np.zeros(
                 (
@@ -196,9 +270,11 @@ def build_persistence_binning_vector(
                 dtype=np.float64
             )
 
+
             feature_blocks.append(
                 bin_matrix.flatten()
             )
+
 
             continue
 
@@ -212,10 +288,12 @@ def build_persistence_binning_vector(
             0
         ]
 
+
         deaths = pd_finite[
             :,
             1
         ]
+
 
         persistences = (
             deaths
@@ -224,14 +302,16 @@ def build_persistence_binning_vector(
         )
 
 
-        # Remove any invalid negative persistence values
+        # Remove invalid negative persistence values
         valid_mask = (
             persistences >= 0
         )
 
+
         births = births[
             valid_mask
         ]
+
 
         persistences = persistences[
             valid_mask
@@ -255,7 +335,7 @@ def build_persistence_binning_vector(
         )
 
 
-        # Flatten the 2D bin matrix into a 1D vector
+        # Flatten the 2D grid
         feature_blocks.append(
             bin_matrix.flatten()
         )
@@ -274,61 +354,110 @@ def build_persistence_binning_vector(
 
 
 # =====================================================================
-# 3. LOAD AND VECTORIZE SAVED LOWER-STAR DIAGRAMS
+# 4. BUILD LOWER-STAR PERSISTENCE-BINNING DATASET
 # =====================================================================
 
-def vectorize_persistence_diagrams(
-    diagram_paths,
+def build_lower_star_dataset(
+    image_paths,
+    output_dir,
     n_bins=3,
     birth_range=(0.0, 255.0),
-    persistence_range=(0.0, 255.0)
+    persistence_range=(0.0, 255.0),
+    stop_after_ph=False,
+    stop_after_vectorization=False
 ):
     """
-    Load saved lower-star persistence diagrams and convert each one
-    into a persistence-binning feature vector.
+    Build a machine-learning dataset from preprocessed images.
+
+    For each image:
+
+        1. Load the preprocessed image
+        2. Scale intensities to 0-255
+        3. Compute lower-star persistent homology
+        4. Separate H0 and H1
+        5. Apply persistence binning
+        6. Store the resulting feature vector
+        7. Assign the experimental class label
 
     Parameters
     ----------
-    diagram_paths : list
-        Paths to saved lower-star persistence diagram .npy files.
+    image_paths : list
+        Paths to preprocessed microscopy images.
 
     n_bins : int, optional
-        Number of bins along each axis.
+        Number of persistence bins along each axis.
 
     birth_range : tuple, optional
-        Birth-value range used for persistence binning.
+        Birth-value range.
 
     persistence_range : tuple, optional
-        Persistence-value range used for persistence binning.
+        Persistence-value range.
 
     Returns
     -------
     tuple
         X : numpy.ndarray
-            Persistence-binning feature matrix.
+            Feature matrix.
 
         y : numpy.ndarray
-            Experimental class labels.
+            Class labels.
 
             0 = Control
             1 = Microgravity
 
         image_names : numpy.ndarray
-            Names of the persistence diagram files.
+            Image filenames.
     """
 
-    vectorized_features = []
+    # ---------------------------------------------------------------
+    # CREATE OUTPUT FOLDERS
+    # ---------------------------------------------------------------
 
-    y_labels = []
+    output_dir = Path(
+        output_dir
+    )
+
+
+    ph_output_dir = (
+        output_dir
+        /
+        "saved_persistent_homology"
+    )
+
+
+    vector_output_dir = (
+        output_dir
+        /
+        "saved_vectorizations"
+    )
+
+
+    ph_output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    vector_output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    X = []
+
+    y = []
 
     image_names = []
 
 
     # ---------------------------------------------------------------
-    # PROCESS EACH SAVED PERSISTENCE DIAGRAM
+    # PROCESS EACH IMAGE
     # ---------------------------------------------------------------
 
-    for path in diagram_paths:
+    for image_number, path in enumerate(
+        image_paths,
+        start=1
+    ):
 
         path = Path(
             path
@@ -336,77 +465,186 @@ def vectorize_persistence_diagrams(
 
 
         print(
-            f"Vectorizing: {path.name}"
+            "\n============================================"
+        )
+
+
+        print(
+            f"IMAGE {image_number} OF {len(image_paths)}"
+        )
+
+
+        print(
+            f"Processing: {path.name}"
         )
 
 
         # -----------------------------------------------------------
-        # LOAD RAW CRIPSER PERSISTENCE DIAGRAM
+        # LOAD PREPROCESSED IMAGE
         # -----------------------------------------------------------
 
-        ph = np.load(
-            path
+        img = img_as_float(
+            io.imread(
+                path,
+                as_gray=True
+            )
         )
 
 
-        # Make sure the persistence diagram has the expected format
-        if (
-            ph.ndim != 2
-            or
-            ph.shape[1] < 3
-        ):
+        # -----------------------------------------------------------
+        # SCALE IMAGE TO 0-255
+        # -----------------------------------------------------------
 
-            raise ValueError(
-                f"Unexpected persistence diagram shape "
-                f"for {path.name}: {ph.shape}"
+        # This keeps the lower-star experiment consistent
+        # with the previously used persistent-homology scale.
+
+        if img.max() <= 1.0:
+
+            img = (
+                img
+                *
+                255.0
             )
 
+
+        img = np.asarray(
+            img,
+            dtype=np.float64
+        )
+
+
+        # -----------------------------------------------------------
+        # DEFINE PERSISTENT HOMOLOGY SAVE PATH
+        # -----------------------------------------------------------
+        
+        ph_save_path = (
+            ph_output_dir
+            /
+            f"{path.stem}_lower_star_ph.npy"
+        )
+        
+        
+        # -----------------------------------------------------------
+        # LOAD SAVED PH IF IT ALREADY EXISTS
+        # -----------------------------------------------------------
+        
+        if ph_save_path.exists():
+        
+            print(
+                "Loading previously saved lower-star "
+                "persistent homology..."
+            )
+        
+            ph_lower = np.load(
+                ph_save_path
+            )
+        
+        
+        # -----------------------------------------------------------
+        # OTHERWISE COMPUTE AND SAVE PH
+        # -----------------------------------------------------------
+        
+        else:
+        
+            print(
+                "Computing lower-star persistent homology..."
+            )
+        
+            ph_lower = compute_lower_star(
+                img
+            )
+        
+        
+            np.save(
+                ph_save_path,
+                ph_lower
+            )
+        
+        
+            print(
+                "Persistent homology saved to:"
+            )
+        
+            print(
+                ph_save_path
+            )
+        
+        
+        print(
+            "Raw persistence diagram shape:",
+            ph_lower.shape
+        )
+        
 
         # -----------------------------------------------------------
         # SEPARATE H0 AND H1
         # -----------------------------------------------------------
 
-        persistence_0 = ph[
-            ph[:, 0] == 0
+        persistence_0 = ph_lower[
+            ph_lower[:, 0] == 0
         ][
             :,
             1:3
         ]
 
 
-        persistence_1 = ph[
-            ph[:, 0] == 1
+        persistence_1 = ph_lower[
+            ph_lower[:, 0] == 1
         ][
             :,
             1:3
         ]
 
 
-        persistence_diagrams = [
-            persistence_0,
-            persistence_1
-        ]
+        print(
+            "H0 intervals:",
+            len(
+                persistence_0
+            )
+        )
+
+
+        print(
+            "H1 intervals:",
+            len(
+                persistence_1
+            )
+        )
 
 
         # -----------------------------------------------------------
-        # BUILD PERSISTENCE-BINNING FEATURE VECTOR
+        # APPLY PERSISTENCE BINNING
         # -----------------------------------------------------------
+
+        print(
+            "Applying persistence binning..."
+        )
+
 
         feature_vector = build_persistence_binning_vector(
-            persistence_diagrams=persistence_diagrams,
+            persistence_diagrams=[
+                persistence_0,
+                persistence_1
+            ],
             n_bins=n_bins,
             birth_range=birth_range,
             persistence_range=persistence_range
         )
 
 
-        vectorized_features.append(
+        print(
+            "Feature vector shape:",
+            feature_vector.shape
+        )
+
+
+        X.append(
             feature_vector
         )
 
 
         # -----------------------------------------------------------
-        # ASSIGN EXPERIMENTAL CLASS LABEL
+        # ASSIGN CLASS LABEL
         # -----------------------------------------------------------
 
         filename_lower = (
@@ -427,12 +665,12 @@ def vectorize_persistence_diagrams(
         else:
 
             raise ValueError(
-                f"Could not determine Control or Microgravity "
-                f"label from filename: {path.name}"
+                "Could not determine class label "
+                f"from filename: {path.name}"
             )
 
 
-        y_labels.append(
+        y.append(
             label
         )
 
@@ -447,14 +685,16 @@ def vectorize_persistence_diagrams(
     # ---------------------------------------------------------------
 
     X = np.asarray(
-        vectorized_features,
+        X,
         dtype=np.float64
     )
 
+
     y = np.asarray(
-        y_labels,
+        y,
         dtype=int
     )
+
 
     image_names = np.asarray(
         image_names
@@ -469,306 +709,145 @@ def vectorize_persistence_diagrams(
 
 
 # =====================================================================
-# 4. MACHINE LEARNING BENCHMARKS AND EVALUATION
+# 5. MACHINE LEARNING
 # =====================================================================
 
 def run_ml_benchmark(
-    X_tda,
+    X,
     y,
-    output_dir,
-    dataset_title="Lower-Star Persistence Binning"
+    output_dir
 ):
     """
     Train and evaluate:
 
-        1. Linear SVM
-        2. RBF SVM
-        3. Neural Network (MLP)
+        1. Linear Support Vector Machine
+        2. Multilayer Perceptron Neural Network
 
-    Each model is trained using standardized persistence-binning
-    feature vectors.
+    Both models use standardized persistence-binning feature vectors.
 
     Accuracy, F1 score, and confusion matrices are calculated.
     """
 
     # ---------------------------------------------------------------
-    # DEFINE CLASSIFIERS
+    # DEFINE MODELS
     # ---------------------------------------------------------------
 
-    names = [
-        "Linear SVM",
-        "RBF SVM",
-        "Neural Network (MLP)"
-    ]
+    models = [
 
+        (
+            "Linear SVM",
 
-    classifiers = [
-
-        SVC(
-            kernel="linear",
-            C=1.0,
-            random_state=42
+            SVC(
+                kernel="linear",
+                C=1.0,
+                random_state=42
+            )
         ),
 
-        SVC(
-            kernel="rbf",
-            gamma=2,
-            C=1.0,
-            random_state=42
-        ),
 
-        MLPClassifier(
-            hidden_layer_sizes=(
-                32,
-                16
-            ),
-            max_iter=1000,
-            random_state=42
+        (
+            "Neural Network (MLP)",
+
+            MLPClassifier(
+                hidden_layer_sizes=(
+                    32,
+                    16
+                ),
+                max_iter=1000,
+                random_state=42
+            )
         )
     ]
 
 
     # ---------------------------------------------------------------
-    # SPLIT DATASET
+    # TRAIN / TEST SPLIT
     # ---------------------------------------------------------------
 
     (
-        X_train_full,
-        X_test_full,
+        X_train,
+        X_test,
         y_train,
         y_test
     ) = train_test_split(
-        X_tda,
+        X,
         y,
-        test_size=0.4,
+        test_size=0.2,
         random_state=42,
-
-        # Preserve Control/Microgravity class proportions
         stratify=y
     )
 
 
     print(
-        "\nTraining samples:",
-        X_train_full.shape[0]
+        "\n============================================"
     )
+
+
+    print(
+        "MACHINE LEARNING DATASET"
+    )
+
+
+    print(
+        "============================================"
+    )
+
+
+    print(
+        "Training samples:",
+        X_train.shape[0]
+    )
+
 
     print(
         "Testing samples:",
-        X_test_full.shape[0]
+        X_test.shape[0]
     )
+
 
     print(
         "Features per image:",
-        X_train_full.shape[1]
+        X_train.shape[1]
     )
 
 
-    # ---------------------------------------------------------------
-    # PCA FOR 2D VISUALIZATION ONLY
-    # ---------------------------------------------------------------
-
-    # Standardize features before PCA visualization
-    pca_scaler = StandardScaler()
-
-    X_train_scaled = pca_scaler.fit_transform(
-        X_train_full
-    )
-
-    X_test_scaled = pca_scaler.transform(
-        X_test_full
-    )
-
-
-    pca = PCA(
-        n_components=2,
-        random_state=42
-    )
-
-
-    X_train_vis = pca.fit_transform(
-        X_train_scaled
-    )
-
-    X_test_vis = pca.transform(
-        X_test_scaled
-    )
-
-
-    print(
-        "\nPCA explained variance:"
-    )
-
-    print(
-        f"PC1: "
-        f"{pca.explained_variance_ratio_[0] * 100:.2f}%"
-    )
-
-    print(
-        f"PC2: "
-        f"{pca.explained_variance_ratio_[1] * 100:.2f}%"
-    )
-
-
-    # ---------------------------------------------------------------
-    # DEFINE PCA PLOT BOUNDARIES
-    # ---------------------------------------------------------------
-
-    x_min = (
-        X_train_vis[:, 0].min()
-        -
-        1.0
-    )
-
-    x_max = (
-        X_train_vis[:, 0].max()
-        +
-        1.0
-    )
-
-    y_min = (
-        X_train_vis[:, 1].min()
-        -
-        1.0
-    )
-
-    y_max = (
-        X_train_vis[:, 1].max()
-        +
-        1.0
-    )
-
-
-    # Plot color maps
-    cm_standard = mcm.RdBu
-
-    cm_bright = ListedColormap(
-        [
-            "#FF0000",
-            "#0000FF"
-        ]
-    )
-
-
-    # ---------------------------------------------------------------
-    # CREATE PCA / DECISION BOUNDARY FIGURE
-    # ---------------------------------------------------------------
-
-    num_classifiers = len(
-        classifiers
-    )
-
-
-    fig = plt.figure(
-        figsize=(
-            3 * num_classifiers + 3,
-            4
-        )
-    )
-
-
-    # ---------------------------------------------------------------
-    # FIRST PANEL: PCA DATA DISTRIBUTION
-    # ---------------------------------------------------------------
-
-    ax = plt.subplot(
-        1,
-        num_classifiers + 1,
-        1
-    )
-
-
-    ax.set_title(
-        f"{dataset_title}\n(Data PCA)",
-        fontsize=9,
-        weight="bold"
-    )
-
-
-    # Training points
-    ax.scatter(
-        X_train_vis[:, 0],
-        X_train_vis[:, 1],
-        c=y_train,
-        cmap=cm_bright,
-        edgecolors="k",
-        s=35
-    )
-
-
-    # Testing points
-    ax.scatter(
-        X_test_vis[:, 0],
-        X_test_vis[:, 1],
-        c=y_test,
-        cmap=cm_bright,
-        alpha=0.5,
-        edgecolors="k",
-        s=35
-    )
-
-
-    ax.set_xlim(
-        x_min,
-        x_max
-    )
-
-    ax.set_ylim(
-        y_min,
-        y_max
-    )
-
-    ax.set_xticks(
-        ()
-    )
-
-    ax.set_yticks(
-        ()
-    )
-
-
-    # Store metrics for CSV output
     metrics_records = []
 
-    # Store confusion matrices for plotting
     confusion_records = []
 
 
     # ---------------------------------------------------------------
-    # TRAIN AND EVALUATE EACH CLASSIFIER
+    # TRAIN EACH MODEL
     # ---------------------------------------------------------------
 
-    for idx, (
-        name,
-        clf
-    ) in enumerate(
-        zip(
-            names,
-            classifiers
-        ),
-        start=2
-    ):
+    for (
+        model_name,
+        classifier
+    ) in models:
+
 
         print(
-            "\n==================================="
+            "\n============================================"
         )
 
-        print(
-            f"TRAINING: {name}"
-        )
 
         print(
-            "==================================="
+            f"TRAINING: {model_name}"
+        )
+
+
+        print(
+            "============================================"
         )
 
 
         # -----------------------------------------------------------
-        # CREATE MACHINE LEARNING PIPELINE
+        # CREATE MODEL PIPELINE
         # -----------------------------------------------------------
 
         model_pipeline = make_pipeline(
             StandardScaler(),
-            clf
+            classifier
         )
 
 
@@ -777,7 +856,7 @@ def run_ml_benchmark(
         # -----------------------------------------------------------
 
         model_pipeline.fit(
-            X_train_full,
+            X_train,
             y_train
         )
 
@@ -787,19 +866,23 @@ def run_ml_benchmark(
         # -----------------------------------------------------------
 
         y_pred = model_pipeline.predict(
-            X_test_full
+            X_test
         )
 
 
         # -----------------------------------------------------------
-        # CALCULATE METRICS
+        # CALCULATE ACCURACY
         # -----------------------------------------------------------
 
-        acc = accuracy_score(
+        accuracy = accuracy_score(
             y_test,
             y_pred
         )
 
+
+        # -----------------------------------------------------------
+        # CALCULATE F1 SCORE
+        # -----------------------------------------------------------
 
         f1 = f1_score(
             y_test,
@@ -809,7 +892,11 @@ def run_ml_benchmark(
         )
 
 
-        cm_data = confusion_matrix(
+        # -----------------------------------------------------------
+        # CALCULATE CONFUSION MATRIX
+        # -----------------------------------------------------------
+
+        cm = confusion_matrix(
             y_test,
             y_pred,
             labels=[
@@ -819,51 +906,64 @@ def run_ml_benchmark(
         )
 
 
+        # -----------------------------------------------------------
+        # PRINT RESULTS
+        # -----------------------------------------------------------
+
         print(
-            f"Accuracy: {acc:.4f}"
+            f"Accuracy: {accuracy:.4f}"
         )
+
 
         print(
             f"F1 Score: {f1:.4f}"
         )
 
+
         print(
             "Confusion Matrix:"
         )
 
+
         print(
-            cm_data
+            cm
         )
 
 
         # -----------------------------------------------------------
-        # SAVE METRICS
+        # STORE RESULTS
         # -----------------------------------------------------------
 
         metrics_records.append(
             {
-                "Model": name,
+                "Model": model_name,
+
                 "Accuracy": round(
-                    acc,
+                    accuracy,
                     4
                 ),
+
                 "F1-Score": round(
                     f1,
                     4
                 ),
-                "TN": cm_data[
+
+                "TN": cm[
                     0,
                     0
                 ],
-                "FP": cm_data[
+
+                "FP": cm[
                     0,
                     1
                 ],
-                "FN": cm_data[
+
+                "FN": cm[
                     1,
                     0
                 ],
-                "TP": cm_data[
+
+                "TP": cm[
                     1,
                     1
                 ]
@@ -873,178 +973,37 @@ def run_ml_benchmark(
 
         confusion_records.append(
             (
-                name,
-                cm_data
+                model_name,
+                cm
             )
         )
-
-
-        # -----------------------------------------------------------
-        # CREATE PCA DECISION BOUNDARY VISUALIZATION
-        # -----------------------------------------------------------
-
-        ax = plt.subplot(
-            1,
-            num_classifiers + 1,
-            idx
-        )
-
-
-        # Create a separate copy of the classifier for
-        # the two-dimensional PCA visualization
-        vis_clf = copy.deepcopy(
-            clf
-        )
-
-
-        vis_pipeline = make_pipeline(
-            StandardScaler(),
-            vis_clf
-        )
-
-
-        try:
-
-            vis_pipeline.fit(
-                X_train_vis,
-                y_train
-            )
-
-
-            DecisionBoundaryDisplay.from_estimator(
-                vis_pipeline,
-                X_train_vis,
-                cmap=cm_standard,
-                alpha=0.8,
-                ax=ax,
-                eps=0.5
-            )
-
-
-        except Exception as error:
-
-            print(
-                f"Could not draw decision boundary "
-                f"for {name}: {error}"
-            )
-
-
-        # Training points
-        ax.scatter(
-            X_train_vis[:, 0],
-            X_train_vis[:, 1],
-            c=y_train,
-            cmap=cm_bright,
-            edgecolors="k",
-            s=25
-        )
-
-
-        # Testing points
-        ax.scatter(
-            X_test_vis[:, 0],
-            X_test_vis[:, 1],
-            c=y_test,
-            cmap=cm_bright,
-            edgecolors="k",
-            alpha=0.5,
-            s=25
-        )
-
-
-        ax.set_xlim(
-            x_min,
-            x_max
-        )
-
-        ax.set_ylim(
-            y_min,
-            y_max
-        )
-
-        ax.set_xticks(
-            ()
-        )
-
-        ax.set_yticks(
-            ()
-        )
-
-
-        ax.set_title(
-            name,
-            fontsize=9,
-            weight="bold"
-        )
-
-
-        metrics_str = (
-            f"Acc: {acc:.2f}\n"
-            f"F1: {f1:.2f}"
-        )
-
-
-        ax.text(
-            x_max - 0.2,
-            y_min
-            +
-            (
-                0.35
-                *
-                (
-                    y_max
-                    -
-                    y_min
-                )
-            ),
-            metrics_str,
-            size=9,
-            horizontalalignment="right",
-            weight="bold",
-            bbox=dict(
-                boxstyle="round",
-                facecolor="white",
-                alpha=0.7,
-                edgecolor="none"
-            )
-        )
-
-
-    # ---------------------------------------------------------------
-    # SHOW PCA / DECISION BOUNDARY FIGURE
-    # ---------------------------------------------------------------
-
-    plt.tight_layout()
-
-    plt.show()
 
 
     # ---------------------------------------------------------------
     # DISPLAY CONFUSION MATRICES
     # ---------------------------------------------------------------
 
-    fig_cm, axes = plt.subplots(
+    fig, axes = plt.subplots(
         1,
-        len(
-            confusion_records
-        ),
+        2,
         figsize=(
-            12,
+            10,
             4
         )
     )
 
 
     for ax, (
-        name,
-        cm_data
+        model_name,
+        cm
     ) in zip(
         axes,
         confusion_records
     ):
 
+
         display = ConfusionMatrixDisplay(
-            confusion_matrix=cm_data,
+            confusion_matrix=cm,
             display_labels=[
                 "Control",
                 "Microgravity"
@@ -1060,7 +1019,7 @@ def run_ml_benchmark(
 
 
         ax.set_title(
-            name
+            model_name
         )
 
 
@@ -1070,7 +1029,7 @@ def run_ml_benchmark(
 
 
     # ---------------------------------------------------------------
-    # SAVE METRICS TABLE
+    # CREATE RESULTS TABLE
     # ---------------------------------------------------------------
 
     df_metrics = pd.DataFrame(
@@ -1078,33 +1037,15 @@ def run_ml_benchmark(
     )
 
 
-    csv_path = (
-        Path(
-            output_dir
-        )
-        /
-        "microgravity_lower_star_"
-        "persistence_binning_ml_metrics.csv"
-    )
-
-
-    df_metrics.to_csv(
-        csv_path,
-        index=False
-    )
-
-
-    # ---------------------------------------------------------------
-    # PRINT FINAL METRICS TABLE
-    # ---------------------------------------------------------------
-
     print(
         "\n============================================"
     )
 
+
     print(
-        "MACHINE LEARNING BENCHMARK PERFORMANCE"
+        "LOWER-STAR PERSISTENCE BINNING RESULTS"
     )
+
 
     print(
         "============================================"
@@ -1118,27 +1059,40 @@ def run_ml_benchmark(
     )
 
 
+    # ---------------------------------------------------------------
+    # SAVE RESULTS
+    # ---------------------------------------------------------------
+
+    csv_path = (
+        Path(
+            output_dir
+        )
+        /
+        "lower_star_persistence_binning_ml_metrics.csv"
+    )
+
+
+    df_metrics.to_csv(
+        csv_path,
+        index=False
+    )
+
+
     print(
-        f"\nEvaluation metrics table saved to:\n"
+        f"\nMetrics saved to:\n"
         f"{csv_path}"
     )
 
 
 # =====================================================================
-# 5. RUNNER CONTROLLER
+# 6. RUNNER CONTROLLER
 # =====================================================================
 
 if __name__ == "__main__":
 
     # ---------------------------------------------------------------
-    # DEFINE DIRECTORY
+    # FOLDER CONTAINING PREPROCESSED IMAGES
     # ---------------------------------------------------------------
-
-    # This folder should contain the saved:
-    #
-    # *_lower_star_diagram.npy
-    #
-    # files created by the first lower-star PH script.
 
     PROCESSED_DIR = Path(
         r"C:\Users\chloe\OneDrive - Simpson College"
@@ -1147,49 +1101,48 @@ if __name__ == "__main__":
 
 
     # ---------------------------------------------------------------
-    # FIND SAVED LOWER-STAR PERSISTENCE DIAGRAMS
+    # FIND PREPROCESSED IMAGES
     # ---------------------------------------------------------------
 
-    diagram_paths = sorted(
+    image_paths = sorted(
         PROCESSED_DIR.glob(
-            "*_lower_star_diagram.npy"
+            "*_processed.tif"
         )
     )
 
 
     # ---------------------------------------------------------------
-    # CHECK THAT PERSISTENCE DIAGRAMS WERE FOUND
+    # CHECK THAT IMAGES WERE FOUND
     # ---------------------------------------------------------------
 
-    if not diagram_paths:
+    if not image_paths:
 
         raise FileNotFoundError(
-            "Could not find any lower-star persistence "
-            "diagrams matching:\n"
-            "*_lower_star_diagram.npy\n\n"
-            f"Directory:\n{PROCESSED_DIR}\n\n"
-            "Run the lower-star persistent homology "
-            "extraction script first."
+            f"Could not find any preprocessed images in:\n"
+            f"{PROCESSED_DIR}"
         )
 
 
     print(
-        f"Found {len(diagram_paths)} "
-        f"lower-star persistence diagrams."
+        f"Found {len(image_paths)} "
+        f"preprocessed images."
     )
 
 
     # ---------------------------------------------------------------
-    # PERSISTENCE BINNING
+    # BUILD LOWER-STAR PERSISTENCE-BINNING DATASET
     # ---------------------------------------------------------------
 
     print(
         "\n============================================"
     )
 
+
     print(
-        "STARTING LOWER-STAR PERSISTENCE BINNING"
+        "BUILDING LOWER-STAR "
+        "PERSISTENCE-BINNING DATASET"
     )
+
 
     print(
         "============================================"
@@ -1197,11 +1150,12 @@ if __name__ == "__main__":
 
 
     (
-        X_topological_features,
-        y_experimental_classes,
-        image_names
-    ) = vectorize_persistence_diagrams(
-        diagram_paths=diagram_paths,
+     X_topological_features,
+     y_experimental_classes,
+     image_names
+    ) = build_lower_star_dataset(
+        image_paths=image_paths,
+        output_dir=PROCESSED_DIR,
         n_bins=N_BINS,
         birth_range=BIRTH_RANGE,
         persistence_range=PERSISTENCE_RANGE
@@ -1213,18 +1167,31 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------
 
     print(
-        "\nPersistence binning complete."
+        "\n============================================"
     )
+
+
+    print(
+        "DATASET COMPLETE"
+    )
+
+
+    print(
+        "============================================"
+    )
+
 
     print(
         "Feature matrix shape:",
         X_topological_features.shape
     )
 
+
     print(
         "Label vector shape:",
         y_experimental_classes.shape
     )
+
 
     print(
         "Control images:",
@@ -1232,6 +1199,7 @@ if __name__ == "__main__":
             y_experimental_classes == 0
         )
     )
+
 
     print(
         "Microgravity images:",
@@ -1274,13 +1242,13 @@ if __name__ == "__main__":
 
 
     # ---------------------------------------------------------------
-    # SAVE PERSISTENCE-BINNING DATASET
+    # SAVE FEATURE MATRIX
     # ---------------------------------------------------------------
 
     np.save(
         PROCESSED_DIR
         /
-        "step2_lower_star_18d_"
+        "lower_star_18d_"
         "persistence_binning_features.npy",
         X_topological_features
     )
@@ -1289,7 +1257,7 @@ if __name__ == "__main__":
     np.save(
         PROCESSED_DIR
         /
-        "step2_lower_star_"
+        "lower_star_"
         "persistence_binning_labels.npy",
         y_experimental_classes
     )
@@ -1298,15 +1266,15 @@ if __name__ == "__main__":
     np.save(
         PROCESSED_DIR
         /
-        "step2_lower_star_"
+        "lower_star_"
         "persistence_binning_names.npy",
         image_names
     )
 
 
     print(
-        "\n18D persistence-binning arrays "
-        "saved to disk."
+        "\nLower-star persistence-binning "
+        "feature arrays saved."
     )
 
 
@@ -1314,24 +1282,15 @@ if __name__ == "__main__":
     # RUN MACHINE LEARNING
     # ---------------------------------------------------------------
 
-    if len(
-        X_topological_features
-    ) < 5:
-
-        raise ValueError(
-            "Not enough samples to perform "
-            "the machine-learning split."
-        )
-
-
     print(
         "\n============================================"
     )
 
+
     print(
-        "RUNNING SUPPORT VECTOR MACHINES "
-        "AND NEURAL NETWORK"
+        "RUNNING LINEAR SVM AND NEURAL NETWORK"
     )
+
 
     print(
         "============================================"
@@ -1339,12 +1298,7 @@ if __name__ == "__main__":
 
 
     run_ml_benchmark(
-        X_tda=X_topological_features,
+        X=X_topological_features,
         y=y_experimental_classes,
-        output_dir=PROCESSED_DIR,
-        dataset_title=(
-            "Lower-Star Persistence Binning "
-            "Machine Learning Experiment"
-        )
+        output_dir=PROCESSED_DIR
     )
-

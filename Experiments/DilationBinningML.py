@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Dilation Filtration Persistence Binning Machine Learning Experiment
+Closing Filtration Persistence Binning Machine Learning Experiment
 
 Pipeline:
     1. Load preprocessed microscopy images
@@ -13,18 +13,6 @@ Pipeline:
     7. Train a Linear SVM
     8. Train a Neural Network
     9. Calculate accuracy, F1 score, and confusion matrices
-
-To change the morphology experiment, change only:
-
-    MORPH_TYPE = "closing"
-
-to:
-
-    MORPH_TYPE = "erosion"
-
-or:
-
-    MORPH_TYPE = "dilation"
 
 @author: Gabriel
 """
@@ -59,6 +47,7 @@ from sklearn.svm import SVC
 # =====================================================================
 
 MORPH_TYPE = "dilation"
+
 
 # ---------------------------------------------------------------
 # BINARY THRESHOLD
@@ -1033,6 +1022,7 @@ def build_persistence_binning_vector(
 
 def build_morphology_dataset(
     image_paths,
+    output_dir,
     morph_type,
     threshold=0.5,
     max_se_length=20,
@@ -1063,6 +1053,26 @@ def build_morphology_dataset(
         image_names : numpy.ndarray
             Image filenames.
     """
+    # ---------------------------------------------------------------
+    # CREATE PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # ---------------------------------------------------------------
+    
+    output_dir = Path(
+        output_dir
+    )
+    
+    
+    ph_output_dir = (
+        output_dir
+        /
+        "saved_persistent_homology"
+    )
+    
+    
+    ph_output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     # ---------------------------------------------------------------
     # CREATE STRUCTURING ELEMENTS ONCE
@@ -1172,30 +1182,94 @@ def build_morphology_dataset(
         )
 
 
-        # -----------------------------------------------------------
-        # COMPUTE MORPHOLOGICAL FILTRATION AND PERSISTENT HOMOLOGY
-        # -----------------------------------------------------------
-
+    # -----------------------------------------------------------
+    # DEFINE PERSISTENT HOMOLOGY SAVE PATH
+    # -----------------------------------------------------------
+    
+    ph_save_path = (
+        ph_output_dir
+        /
+        f"{path.stem}_{morph_type}_ph.npz"
+    )
+    
+    
+    # -----------------------------------------------------------
+    # LOAD SAVED PH IF IT ALREADY EXISTS
+    # -----------------------------------------------------------
+    
+    if ph_save_path.exists():
+    
         print(
-            f"Computing {morph_type} filtration..."
+            f"Loading previously saved {morph_type} "
+            "persistent homology..."
         )
-
-
+    
+    
+        saved_ph = np.load(
+            ph_save_path
+        )
+    
+    
+        persistence_0 = saved_ph[
+            "H0"
+        ]
+    
+    
+        persistence_1 = saved_ph[
+            "H1"
+        ]
+    
+    
+        persistence_diagrams = [
+            persistence_0,
+            persistence_1
+        ]
+    
+    
+    # -----------------------------------------------------------
+    # OTHERWISE COMPUTE AND SAVE PH
+    # -----------------------------------------------------------
+    
+    else:
+    
+        print(
+            f"Computing {morph_type} filtration and "
+            "persistent homology..."
+        )
+    
+    
         persistence_diagrams = persistence_of_morph_filtration(
             img=binary_img,
             kernel_list=kernel_list,
             morph_type=morph_type
         )
-
-
+    
+    
         persistence_0 = persistence_diagrams[
             0
         ]
-
-
+    
+    
         persistence_1 = persistence_diagrams[
             1
         ]
+    
+    
+        np.savez_compressed(
+            ph_save_path,
+            H0=persistence_0,
+            H1=persistence_1
+        )
+    
+    
+        print(
+            "Persistent homology saved to:"
+        )
+    
+    
+        print(
+            ph_save_path
+        )
 
 
         print(
@@ -1381,7 +1455,7 @@ def run_ml_benchmark(
     ) = train_test_split(
         X,
         y,
-        test_size=0.4,
+        test_size=0.2,
         random_state=42,
         stratify=y
     )
@@ -1759,6 +1833,7 @@ if __name__ == "__main__":
         image_names
     ) = build_morphology_dataset(
         image_paths=image_paths,
+        output_dir=PROCESSED_DIR,
         morph_type=MORPH_TYPE,
         threshold=THRESHOLD,
         max_se_length=MAX_SE_LENGTH,
@@ -1908,6 +1983,4 @@ if __name__ == "__main__":
         output_dir=PROCESSED_DIR,
         morph_type=MORPH_TYPE
     )
-
-
 

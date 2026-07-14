@@ -525,6 +525,7 @@ def build_persistence_binning_vector(
 
 def build_density_dataset(
     image_paths,
+    output_dir,
     max_dist=5,
     n_bins=3
 ):
@@ -571,6 +572,28 @@ def build_density_dataset(
         image_names : numpy.ndarray
             Image filenames.
     """
+    
+    # ---------------------------------------------------------------
+    # CREATE PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # ---------------------------------------------------------------
+    
+    output_dir = Path(
+        output_dir
+    )
+    
+    
+    ph_output_dir = (
+        output_dir
+        /
+        "saved_persistent_homology"
+    )
+    
+    
+    ph_output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
 
     # ---------------------------------------------------------------
     # DETERMINE FIXED DENSITY FILTRATION RANGE
@@ -741,35 +764,80 @@ def build_density_dataset(
 
 
         # -----------------------------------------------------------
-        # COMPUTE DENSITY FILTRATION AND PERSISTENT HOMOLOGY
+        # DEFINE PERSISTENT HOMOLOGY SAVE PATH
         # -----------------------------------------------------------
-
-        print(
-            "Computing density filtration..."
+        
+        ph_save_path = (
+            ph_output_dir
+            /
+            f"{path.stem}_density_ph.npy"
         )
-
-
-        (
-            density_img,
-            ph_density
-        ) = compute_density_ph(
-            binary_image=binary_img,
-            max_dist=max_dist
-        )
-
-
-        print(
-            "Density filtration minimum:",
-            density_img.min()
-        )
-
-
-        print(
-            "Density filtration maximum:",
-            density_img.max()
-        )
-
-
+        
+        
+        # -----------------------------------------------------------
+        # LOAD SAVED PH IF IT ALREADY EXISTS
+        # -----------------------------------------------------------
+        
+        if ph_save_path.exists():
+        
+            print(
+                "Loading previously saved density "
+                "persistent homology..."
+            )
+        
+            ph_density = np.load(
+                ph_save_path
+            )
+        
+        
+        # -----------------------------------------------------------
+        # OTHERWISE COMPUTE DENSITY FILTRATION AND SAVE PH
+        # -----------------------------------------------------------
+        
+        else:
+        
+            print(
+                "Computing density filtration and "
+                "persistent homology..."
+            )
+        
+        
+            (
+                density_img,
+                ph_density
+            ) = compute_density_ph(
+                binary_image=binary_img,
+                max_dist=max_dist
+            )
+        
+        
+            print(
+                "Density filtration minimum:",
+                density_img.min()
+            )
+        
+        
+            print(
+                "Density filtration maximum:",
+                density_img.max()
+            )
+        
+        
+            np.save(
+                ph_save_path,
+                ph_density
+            )
+        
+        
+            print(
+                "Persistent homology saved to:"
+            )
+        
+            print(
+                ph_save_path
+            )
+        
+        
         print(
             "Raw persistence diagram shape:",
             ph_density.shape
@@ -972,7 +1040,7 @@ def run_ml_benchmark(
     ) = train_test_split(
         X,
         y,
-        test_size=0.4,
+        test_size=0.2,
         random_state=42,
         stratify=y
     )
@@ -1355,6 +1423,7 @@ if __name__ == "__main__":
         image_names
     ) = build_density_dataset(
         image_paths=image_paths,
+        output_dir=PROCESSED_DIR,
         max_dist=MAX_DIST,
         n_bins=N_BINS
     )

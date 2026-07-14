@@ -207,10 +207,10 @@ def build_persistence_binning_vector(
     # PROCESS H0 AND H1 SEPARATELY
     # ---------------------------------------------------------------
 
-    for pd in persistence_diagrams:
+    for diagram in persistence_diagrams:
 
         pd = np.asarray(
-            pd,
+            diagram,
             dtype=np.float64
         )
 
@@ -363,6 +363,7 @@ def build_persistence_binning_vector(
 
 def build_upper_star_dataset(
     image_paths,
+    output_dir,
     n_bins=3,
     birth_range=(0.0, 255.0),
     persistence_range=(0.0, 255.0)
@@ -409,6 +410,26 @@ def build_upper_star_dataset(
         image_names : numpy.ndarray
             Image filenames.
     """
+    # ---------------------------------------------------------------
+    # CREATE PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # ---------------------------------------------------------------
+    
+    output_dir = Path(
+        output_dir
+    )
+    
+    
+    ph_output_dir = (
+        output_dir
+        /
+        "saved_persistent_homology"
+    )
+    
+    
+    ph_output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     X = []
 
@@ -481,23 +502,66 @@ def build_upper_star_dataset(
 
 
         # -----------------------------------------------------------
-        # COMPUTE UPPER-STAR PERSISTENT HOMOLOGY
+        # DEFINE PERSISTENT HOMOLOGY SAVE PATH
         # -----------------------------------------------------------
 
+        ph_save_path = (
+            ph_output_dir
+            /
+            f"{path.stem}_upper_star_ph.npy"
+            )
+
+
+            # -----------------------------------------------------------
+            # LOAD SAVED PH IF IT ALREADY EXISTS
+            # -----------------------------------------------------------
+            
+        if ph_save_path.exists():
+            
+                print(
+                    "Loading previously saved upper-star "
+                    "persistent homology..."
+                )
+            
+                ph_upper = np.load(
+                    ph_save_path
+                )
+            
+            
+            # -----------------------------------------------------------
+            # OTHERWISE COMPUTE AND SAVE PH
+            # -----------------------------------------------------------
+            
+        else:
+            
+                print(
+                    "Computing upper-star persistent homology..."
+                )
+            
+                ph_upper = compute_upper_star(
+                    img
+                )
+            
+            
+                np.save(
+                    ph_save_path,
+                    ph_upper
+                )
+            
+            
+                print(
+                    "Persistent homology saved to:"
+                )
+            
+                print(
+                    ph_save_path
+                )
+            
+            
         print(
-            "Computing upper-star persistent homology..."
-        )
-
-
-        ph_upper = compute_upper_star(
-            img
-        )
-
-
-        print(
-            "Raw persistence diagram shape:",
-            ph_upper.shape
-        )
+                "Raw persistence diagram shape:",
+                ph_upper.shape
+            )
 
 
         # -----------------------------------------------------------
@@ -696,7 +760,7 @@ def run_ml_benchmark(
     ) = train_test_split(
         X,
         y,
-        test_size=0.4,
+        test_size=0.2,
         random_state=42,
         stratify=y
     )
@@ -1071,6 +1135,7 @@ if __name__ == "__main__":
         image_names
     ) = build_upper_star_dataset(
         image_paths=image_paths,
+        output_dir=PROCESSED_DIR,
         n_bins=N_BINS,
         birth_range=BIRTH_RANGE,
         persistence_range=PERSISTENCE_RANGE
