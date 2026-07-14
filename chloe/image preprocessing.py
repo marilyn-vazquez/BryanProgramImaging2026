@@ -1,12 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Jul 14 09:06:15 2026
-
-@author: chloe
-"""
-
-import os
-import glob
 from pathlib import Path
 from skimage import io, exposure, filters
 from skimage.util import img_as_float
@@ -17,7 +8,7 @@ from skimage.util import img_as_float
 
 def preprocess_single(image_input, sigma=0.5, clip_limit=0.015):
     """
-    Preprocess a single microscopy image: convert to float, crop 
+    Preprocess a single microscopy image: convert to float, crop
     the info bar, smooth with Gaussian blur, and apply CLAHE.
     """
     # Load image as grayscale float between 0 and 1
@@ -25,16 +16,16 @@ def preprocess_single(image_input, sigma=0.5, clip_limit=0.015):
         img = img_as_float(io.imread(image_input, as_gray=True))
     else:
         img = img_as_float(image_input)
-        
+       
     # Crop the microscope information bar (adjust coordinate if needed)
-    img_cropped = img[:3850, :]
+    img_cropped = img[:-300, :]
    
     # Apply gaussian blur to reduce noise
     img_smoothed = filters.gaussian(img_cropped, sigma=sigma)
    
     # Apply CLAHE to enhance local contrast
     img_clahe = exposure.equalize_adapthist(img_smoothed, kernel_size=256, clip_limit=clip_limit)
-    
+   
     return img_clahe
 
 
@@ -62,7 +53,7 @@ def process_batch(image_paths, reference_path, out_dir, sigma=0.5, clip_limit=0.
             img_clahe = preprocess_single(path, sigma=sigma, clip_limit=clip_limit)
             img_ready = exposure.match_histograms(img_clahe, ref_ready)
                        
-        # Save immediately as high-precision 32-bit float TIFF
+        # Save the preprocessed image as a floating point TIFF
         save_path = out_dir / f"{path.stem}_processed.tif"
         io.imsave(save_path, img_ready, check_contrast=False)
        
@@ -79,7 +70,7 @@ if __name__ == '__main__':
     # Define paths
     IMAGE_DIR = Path(r"C:\Users\chloe\OneDrive - Simpson College\IMAGES2.0\All Images")
     PROCESSED_DIR = IMAGE_DIR / "preprocessed_images"  # New folder for output
-    
+   
     # Gather target images
     IMAGE_EXTENSIONS = ('*.png', '*.jpg', '*.jpeg', '*.tif', '*.tiff')
     image_paths = []
@@ -89,23 +80,23 @@ if __name__ == '__main__':
 
     # Clean and sort the path list
     image_paths = sorted(list(set(image_paths)))
-    
+   
     if not image_paths:
         raise FileNotFoundError(f"Could not find any images in: {IMAGE_DIR}")
-        
+       
     print(f"Found {len(image_paths)} images to process.")
-    
-    # Select the first image as your contrast baseline template
-    reference_image = image_paths[0]
+   
+    # Select the reference image for histogram matching
+    reference_image = (IMAGE_DIR / "control_stub1_3-2-26_0046(1).tif")
     print(f"Using {reference_image.name} as the master baseline reference.\n")
-    
+   
     print("=== Starting Image Pre-processing ===")
     count = process_batch(
-        image_paths=image_paths, 
-        reference_path=reference_image, 
-        out_dir=PROCESSED_DIR, 
-        sigma=0.5, 
+        image_paths=image_paths,
+        reference_path=reference_image,
+        out_dir=PROCESSED_DIR,
+        sigma=0.5,
         clip_limit=0.015
     )
-    
+   
     print(f"\nPreprocessing complete! {count} standardized images are saved in:\n{PROCESSED_DIR}")
