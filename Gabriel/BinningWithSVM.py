@@ -8,6 +8,14 @@ from skimage import io, exposure, filters
 from skimage.util import img_as_float
 from sklearn.decomposition import PCA
 from itertools import combinations
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    ConfusionMatrixDisplay
+)
 
 # -------------------------------------------------------------------
 # PRE-PROCESSING
@@ -1088,18 +1096,6 @@ def build_persistence_binning_vector(
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-
-    import matplotlib.pyplot as plt
-
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.svm import SVC
-
-    from sklearn.metrics import (
-        accuracy_score,
-        f1_score,
-        ConfusionMatrixDisplay
-    )
-
 
     # ---------------------------------------------------------------
     # IMAGE FOLDERS
