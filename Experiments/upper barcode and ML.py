@@ -9,6 +9,7 @@ This script performs the complete upper-star pipeline directly on your preproces
 3. Saves raw persistence diagrams (*_upper_star_diagram.npy).
 4. Summarizes raw diagrams into a unified 10D barcode feature vector.
 5. Evaluates classification via Linear SVM, RBF SVM, and an MLP Neural Network.
+6. Exports classifier performance metrics to a CSV file.
 """
 
 import os
@@ -21,6 +22,7 @@ import cripser as cr
 import matplotlib.pyplot as plt
 import matplotlib.cm as mcm
 from matplotlib.colors import ListedColormap
+import pdb  # Interactive debugging module
 
 from skimage import io
 from skimage.util import img_as_float
@@ -70,6 +72,13 @@ def compute_upper_star_ph(images_paths, output_dir):
         # Compute Persistent Homology
         ph_diagram = cr.computePH(img_input) if hasattr(cr, "computePH") else cr.compute_ph(img_input)
         
+        # -------------------------------------------------------------
+        # 🔬 PDB CHECKPOINT: INSPECT IMAGE PERSISTENT HOMOLOGY
+        # -------------------------------------------------------------
+        # Uncomment the line below to inspect variables per image (e.g., img_input, ph_diagram)
+        # pdb.set_trace()
+        # -------------------------------------------------------------
+
         # Save the raw persistence diagram matrix [dim, birth, death]
         save_path = output_dir / f"{path.stem}_upper_star_diagram.npy"
         np.save(save_path, ph_diagram)
@@ -126,6 +135,13 @@ def vectorize_upper_star_diagrams(diagram_paths):
         label = 1 if "microgravity" in path.name.lower() else 0
         y_labels.append(label)
         
+    # -----------------------------------------------------------------
+    # 🔬 PDB CHECKPOINT: INSPECT BARCODE FEATURE VECTORIZATION
+    # -----------------------------------------------------------------
+    # Uncomment the line below to inspect vectorized arrays before modeling
+    # pdb.set_trace()
+    # -----------------------------------------------------------------
+
     return np.array(vectorized_features), np.array(y_labels)
 
 # =====================================================================
@@ -230,6 +246,13 @@ def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Upper-Star Barcode Exp
     print("\n📊 --- MACHINE LEARNING BENCHMARK PERFORMANCE ---")
     print(df_metrics.to_string(index=False))
     print(f"\n✅ Evaluation metrics table saved to: {csv_path}\n")
+
+    # -----------------------------------------------------------------
+    # 🔬 PDB CHECKPOINT: INSPECT CLASSIFIERS & METRICS
+    # -----------------------------------------------------------------
+    # Uncomment the line below to inspect variables (e.g., df_metrics, X_train_full, y_test, y_pred)
+    # pdb.set_trace()
+    # -----------------------------------------------------------------
 
 # =====================================================================
 # 4. RUNNER CONTROLLER
