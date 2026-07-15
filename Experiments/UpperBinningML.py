@@ -5,28 +5,36 @@ Upper-Star Persistence Binning Machine Learning Experiment
 Pipeline:
     1. Load preprocessed microscopy images
     2. Compute upper-star persistent homology
-    3. Apply persistence binning
-    4. Build an 18-dimensional feature vector for each image
-    5. Train a Linear SVM
-    6. Train a Neural Network
-    7. Calculate accuracy, F1 score, and confusion matrices
+    3. Save persistent homology for each image
+    4. Apply persistence binning
+    5. Build an 18-dimensional feature vector for each image
+    6. Save vectorization results
+    7. Train a Linear SVM
+    8. Train a Neural Network
+    9. Calculate accuracy, F1 score, and confusion matrices
+    10. Save classification results
 
 @author: Gabriel
 """
 
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
 import cripser
+
 from skimage import io
 from skimage.util import img_as_float
+
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
     ConfusionMatrixDisplay,
     f1_score
 )
+
 from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
@@ -42,7 +50,7 @@ from sklearn.svm import SVC
 N_BINS = 3
 
 
-# Images will be scaled to 0-255 before persistent homology.
+# Images are scaled to 0-255 before persistent homology
 BIRTH_RANGE = (
     0.0,
     255.0
@@ -59,7 +67,9 @@ PERSISTENCE_RANGE = (
 # 2. UPPER-STAR PERSISTENT HOMOLOGY
 # =====================================================================
 
-def compute_upper_star(preprocessed_img):
+def compute_upper_star(
+    preprocessed_img
+):
     """
     Compute an upper-star persistence diagram from a
     preprocessed grayscale image.
@@ -76,9 +86,7 @@ def compute_upper_star(preprocessed_img):
     Returns
     -------
     numpy.ndarray
-        Raw Cripser persistence diagram containing:
-
-            [dimension, birth, death]
+        Raw Cripser persistence diagram.
     """
 
     # ---------------------------------------------------------------
@@ -93,7 +101,7 @@ def compute_upper_star(preprocessed_img):
 
 
     # ---------------------------------------------------------------
-    # COMPUTE PERSISTENT HOMOLOGY
+    # COMPUTE UPPER-STAR PERSISTENT HOMOLOGY
     # ---------------------------------------------------------------
 
     if hasattr(
@@ -131,7 +139,7 @@ def build_persistence_binning_vector(
     Convert H0 and H1 persistence diagrams into one fixed-length
     persistence-binning feature vector.
 
-    Each point is transformed from:
+    Each persistence point is transformed from:
 
         (birth, death)
 
@@ -143,36 +151,40 @@ def build_persistence_binning_vector(
 
         persistence = death - birth
 
-    A two-dimensional histogram is created over the
+    A two-dimensional histogram is constructed over the
     birth-persistence plane.
 
-    Each persistence point contributes its persistence value
-    as the weight of the bin containing that feature.
+    Each persistence point contributes its persistence value as the
+    weight of the bin containing that point.
 
-    H0 and H1 are binned separately and concatenated.
+    H0 and H1 are binned separately and then concatenated.
 
     Parameters
     ----------
     persistence_diagrams : list
         List containing:
 
-            persistence_diagrams[0] = H0
-            persistence_diagrams[1] = H1
+            persistence_diagrams[0] = H0 diagram
+            persistence_diagrams[1] = H1 diagram
+
+        Each diagram contains:
+
+            [birth, death]
 
     n_bins : int, optional
         Number of bins along each axis.
         Default is 3.
 
     birth_range : tuple, optional
-        Minimum and maximum birth values.
+        Minimum and maximum birth values used for binning.
 
     persistence_range : tuple, optional
-        Minimum and maximum persistence values.
+        Minimum and maximum persistence values used for binning.
 
     Returns
     -------
     numpy.ndarray
-        Fixed-length persistence-binning vector.
+        Fixed-length persistence-binning feature vector.
 
         With n_bins=3:
 
@@ -216,7 +228,7 @@ def build_persistence_binning_vector(
 
 
         # -----------------------------------------------------------
-        # HANDLE EMPTY DIAGRAM
+        # HANDLE EMPTY PERSISTENCE DIAGRAM
         # -----------------------------------------------------------
 
         if pd.size == 0:
@@ -306,7 +318,10 @@ def build_persistence_binning_vector(
         )
 
 
-        # Remove invalid negative persistence values
+        # -----------------------------------------------------------
+        # REMOVE INVALID NEGATIVE PERSISTENCE VALUES
+        # -----------------------------------------------------------
+
         valid_mask = (
             persistences >= 0
         )
@@ -323,7 +338,7 @@ def build_persistence_binning_vector(
 
 
         # -----------------------------------------------------------
-        # BUILD WEIGHTED PERSISTENCE-BINNING GRID
+        # BUILD WEIGHTED 2D PERSISTENCE-BINNING GRID
         # -----------------------------------------------------------
 
         bin_matrix, _, _ = np.histogram2d(
@@ -333,13 +348,14 @@ def build_persistence_binning_vector(
                 birth_bins,
                 persistence_bins
             ],
-
-            # Longer-lived features receive greater weight
             weights=persistences
         )
 
 
-        # Flatten the 2D grid
+        # -----------------------------------------------------------
+        # FLATTEN THE 2D GRID
+        # -----------------------------------------------------------
+
         feature_blocks.append(
             bin_matrix.flatten()
         )
@@ -358,12 +374,12 @@ def build_persistence_binning_vector(
 
 
 # =====================================================================
-# 4. BUILD THE UPPER-STAR PERSISTENCE-BINNING DATASET
+# 4. BUILD UPPER-STAR PERSISTENCE-BINNING DATASET
 # =====================================================================
 
 def build_upper_star_dataset(
     image_paths,
-    output_dir,
+    ph_output_dir,
     n_bins=3,
     birth_range=(0.0, 255.0),
     persistence_range=(0.0, 255.0)
@@ -375,16 +391,20 @@ def build_upper_star_dataset(
 
         1. Load the preprocessed image
         2. Scale intensities to 0-255
-        3. Compute upper-star persistent homology
-        4. Separate H0 and H1
-        5. Apply persistence binning
-        6. Store the resulting feature vector
-        7. Assign the experimental class label
+        3. Compute or load upper-star persistent homology
+        4. Save persistent homology if newly computed
+        5. Separate H0 and H1
+        6. Apply persistence binning
+        7. Store the resulting feature vector
+        8. Assign the experimental class label
 
     Parameters
     ----------
     image_paths : list
         Paths to preprocessed microscopy images.
+
+    ph_output_dir : pathlib.Path
+        Folder used to save and load persistent homology results.
 
     n_bins : int, optional
         Number of persistence bins along each axis.
@@ -410,26 +430,25 @@ def build_upper_star_dataset(
         image_names : numpy.ndarray
             Image filenames.
     """
+
     # ---------------------------------------------------------------
-    # CREATE PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # MAKE SURE PH OUTPUT DIRECTORY EXISTS
     # ---------------------------------------------------------------
-    
-    output_dir = Path(
-        output_dir
+
+    ph_output_dir = Path(
+        ph_output_dir
     )
-    
-    
-    ph_output_dir = (
-        output_dir
-        /
-        "saved_persistent_homology"
-    )
-    
-    
+
+
     ph_output_dir.mkdir(
         parents=True,
         exist_ok=True
     )
+
+
+    # ---------------------------------------------------------------
+    # CREATE DATASET STORAGE LISTS
+    # ---------------------------------------------------------------
 
     X = []
 
@@ -483,9 +502,6 @@ def build_upper_star_dataset(
         # SCALE IMAGE TO 0-255
         # -----------------------------------------------------------
 
-        # This keeps the upper-star experiment consistent
-        # with the lower-star experiment.
-
         if img.max() <= 1.0:
 
             img = (
@@ -509,59 +525,72 @@ def build_upper_star_dataset(
             ph_output_dir
             /
             f"{path.stem}_upper_star_ph.npy"
-            )
+        )
 
 
-            # -----------------------------------------------------------
-            # LOAD SAVED PH IF IT ALREADY EXISTS
-            # -----------------------------------------------------------
-            
+        # -----------------------------------------------------------
+        # LOAD SAVED PH IF IT ALREADY EXISTS
+        # -----------------------------------------------------------
+
         if ph_save_path.exists():
-            
-                print(
-                    "Loading previously saved upper-star "
-                    "persistent homology..."
-                )
-            
-                ph_upper = np.load(
-                    ph_save_path
-                )
-            
-            
-            # -----------------------------------------------------------
-            # OTHERWISE COMPUTE AND SAVE PH
-            # -----------------------------------------------------------
-            
-        else:
-            
-                print(
-                    "Computing upper-star persistent homology..."
-                )
-            
-                ph_upper = compute_upper_star(
-                    img
-                )
-            
-            
-                np.save(
-                    ph_save_path,
-                    ph_upper
-                )
-            
-            
-                print(
-                    "Persistent homology saved to:"
-                )
-            
-                print(
-                    ph_save_path
-                )
-            
-            
-        print(
-                "Raw persistence diagram shape:",
-                ph_upper.shape
+
+            print(
+                "Loading previously saved upper-star "
+                "persistent homology..."
             )
+
+
+            ph_upper = np.load(
+                ph_save_path
+            )
+
+
+            print(
+                "Loaded from:"
+            )
+
+
+            print(
+                ph_save_path
+            )
+
+
+        # -----------------------------------------------------------
+        # OTHERWISE COMPUTE AND SAVE PH
+        # -----------------------------------------------------------
+
+        else:
+
+            print(
+                "Computing upper-star persistent homology..."
+            )
+
+
+            ph_upper = compute_upper_star(
+                img
+            )
+
+
+            np.save(
+                ph_save_path,
+                ph_upper
+            )
+
+
+            print(
+                "Persistent homology saved to:"
+            )
+
+
+            print(
+                ph_save_path
+            )
+
+
+        print(
+            "Raw persistence diagram shape:",
+            ph_upper.shape
+        )
 
 
         # -----------------------------------------------------------
@@ -711,10 +740,26 @@ def run_ml_benchmark(
         1. Linear Support Vector Machine
         2. Multilayer Perceptron Neural Network
 
-    Both models use standardized persistence-binning vectors.
+    Both models use standardized persistence-binning feature vectors.
 
-    Accuracy, F1 score, and confusion matrices are calculated.
+    Accuracy, F1 score, and confusion matrices are calculated
+    and saved.
     """
+
+    # ---------------------------------------------------------------
+    # MAKE SURE CLASSIFICATION OUTPUT DIRECTORY EXISTS
+    # ---------------------------------------------------------------
+
+    output_dir = Path(
+        output_dir
+    )
+
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
 
     # ---------------------------------------------------------------
     # DEFINE MODELS
@@ -840,7 +885,7 @@ def run_ml_benchmark(
 
 
         # -----------------------------------------------------------
-        # TRAIN
+        # TRAIN MODEL
         # -----------------------------------------------------------
 
         model_pipeline.fit(
@@ -850,7 +895,7 @@ def run_ml_benchmark(
 
 
         # -----------------------------------------------------------
-        # PREDICT
+        # MAKE PREDICTIONS
         # -----------------------------------------------------------
 
         y_pred = model_pipeline.predict(
@@ -859,7 +904,7 @@ def run_ml_benchmark(
 
 
         # -----------------------------------------------------------
-        # CALCULATE METRICS
+        # CALCULATE ACCURACY
         # -----------------------------------------------------------
 
         accuracy = accuracy_score(
@@ -868,6 +913,10 @@ def run_ml_benchmark(
         )
 
 
+        # -----------------------------------------------------------
+        # CALCULATE F1 SCORE
+        # -----------------------------------------------------------
+
         f1 = f1_score(
             y_test,
             y_pred,
@@ -875,6 +924,10 @@ def run_ml_benchmark(
             zero_division=0
         )
 
+
+        # -----------------------------------------------------------
+        # CALCULATE CONFUSION MATRIX
+        # -----------------------------------------------------------
 
         cm = confusion_matrix(
             y_test,
@@ -1005,6 +1058,35 @@ def run_ml_benchmark(
 
     plt.tight_layout()
 
+
+    # ---------------------------------------------------------------
+    # SAVE CONFUSION MATRIX FIGURE
+    # ---------------------------------------------------------------
+
+    confusion_matrix_path = (
+        output_dir
+        /
+        "upper_star_confusion_matrices.png"
+    )
+
+
+    plt.savefig(
+        confusion_matrix_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+
+    print(
+        "\nConfusion matrix figure saved to:"
+    )
+
+
+    print(
+        confusion_matrix_path
+    )
+
+
     plt.show()
 
 
@@ -1044,9 +1126,7 @@ def run_ml_benchmark(
     # ---------------------------------------------------------------
 
     csv_path = (
-        Path(
-            output_dir
-        )
+        output_dir
         /
         "upper_star_persistence_binning_ml_metrics.csv"
     )
@@ -1059,8 +1139,12 @@ def run_ml_benchmark(
 
 
     print(
-        f"\nMetrics saved to:\n"
-        f"{csv_path}"
+        "\nMetrics saved to:"
+    )
+
+
+    print(
+        csv_path
     )
 
 
@@ -1071,12 +1155,142 @@ def run_ml_benchmark(
 if __name__ == "__main__":
 
     # ---------------------------------------------------------------
-    # FOLDER CONTAINING PREPROCESSED IMAGES
+    # INPUT FOLDER: PREPROCESSED IMAGES
     # ---------------------------------------------------------------
 
     PROCESSED_DIR = Path(
-        r"C:\Users\chloe\OneDrive - Simpson College"
-        r"\IMAGES2.0\All Images\preprocessed_images"
+        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\preprocessed_images"
+    )
+
+
+    # ---------------------------------------------------------------
+    # BASE RESULTS FOLDER
+    # ---------------------------------------------------------------
+
+    BASE_RESULTS_DIR = Path(
+        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\Results"
+    )
+
+
+    # ---------------------------------------------------------------
+    # FILTRATION NAME
+    # ---------------------------------------------------------------
+
+    FILTRATION_NAME = "Upper_Star"
+
+
+    # ---------------------------------------------------------------
+    # FILTRATION-SPECIFIC RESULTS FOLDER
+    # ---------------------------------------------------------------
+
+    RESULTS_DIR = (
+        BASE_RESULTS_DIR
+        /
+        FILTRATION_NAME
+    )
+
+
+    # ---------------------------------------------------------------
+    # PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    PH_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Persistent_Homology"
+    )
+
+
+    # ---------------------------------------------------------------
+    # VECTORIZATION OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    VECTORIZATION_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Vectorization"
+    )
+
+
+    # ---------------------------------------------------------------
+    # CLASSIFICATION OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    CLASSIFICATION_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Classification"
+    )
+
+
+    # ---------------------------------------------------------------
+    # CREATE OUTPUT FOLDERS
+    # ---------------------------------------------------------------
+
+    PH_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    VECTORIZATION_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    CLASSIFICATION_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    # ---------------------------------------------------------------
+    # REPORT OUTPUT FOLDERS
+    # ---------------------------------------------------------------
+
+    print(
+        "\n============================================"
+    )
+
+
+    print(
+        "OUTPUT FOLDERS"
+    )
+
+
+    print(
+        "============================================"
+    )
+
+
+    print(
+        "Persistent Homology:"
+    )
+
+
+    print(
+        PH_OUTPUT_DIR
+    )
+
+
+    print(
+        "\nVectorization:"
+    )
+
+
+    print(
+        VECTORIZATION_OUTPUT_DIR
+    )
+
+
+    print(
+        "\nClassification:"
+    )
+
+
+    print(
+        CLASSIFICATION_OUTPUT_DIR
     )
 
 
@@ -1104,7 +1318,7 @@ if __name__ == "__main__":
 
 
     print(
-        f"Found {len(image_paths)} "
+        f"\nFound {len(image_paths)} "
         f"preprocessed images."
     )
 
@@ -1135,7 +1349,7 @@ if __name__ == "__main__":
         image_names
     ) = build_upper_star_dataset(
         image_paths=image_paths,
-        output_dir=PROCESSED_DIR,
+        ph_output_dir=PH_OUTPUT_DIR,
         n_bins=N_BINS,
         birth_range=BIRTH_RANGE,
         persistence_range=PERSISTENCE_RANGE
@@ -1190,7 +1404,7 @@ if __name__ == "__main__":
 
 
     # ---------------------------------------------------------------
-    # VERIFY FEATURE VECTOR LENGTH
+    # VERIFY EXPECTED FEATURE VECTOR LENGTH
     # ---------------------------------------------------------------
 
     expected_features = (
@@ -1222,39 +1436,105 @@ if __name__ == "__main__":
 
 
     # ---------------------------------------------------------------
+    # DEFINE VECTORIZATION SAVE PATHS
+    # ---------------------------------------------------------------
+
+    features_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        "upper_star_18d_"
+        "persistence_binning_features.npy"
+    )
+
+
+    labels_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        "upper_star_"
+        "persistence_binning_labels.npy"
+    )
+
+
+    names_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        "upper_star_"
+        "persistence_binning_names.npy"
+    )
+
+
+    # ---------------------------------------------------------------
     # SAVE FEATURE MATRIX
     # ---------------------------------------------------------------
 
     np.save(
-        PROCESSED_DIR
-        /
-        "upper_star_18d_"
-        "persistence_binning_features.npy",
+        features_save_path,
         X_topological_features
     )
 
 
+    # ---------------------------------------------------------------
+    # SAVE LABELS
+    # ---------------------------------------------------------------
+
     np.save(
-        PROCESSED_DIR
-        /
-        "upper_star_"
-        "persistence_binning_labels.npy",
+        labels_save_path,
         y_experimental_classes
     )
 
 
+    # ---------------------------------------------------------------
+    # SAVE IMAGE NAMES
+    # ---------------------------------------------------------------
+
     np.save(
-        PROCESSED_DIR
-        /
-        "upper_star_"
-        "persistence_binning_names.npy",
+        names_save_path,
         image_names
     )
 
 
     print(
-        "\nUpper-star persistence-binning "
-        "feature arrays saved."
+        "\n============================================"
+    )
+
+
+    print(
+        "VECTORIZATION RESULTS SAVED"
+    )
+
+
+    print(
+        "============================================"
+    )
+
+
+    print(
+        "Features:"
+    )
+
+
+    print(
+        features_save_path
+    )
+
+
+    print(
+        "\nLabels:"
+    )
+
+
+    print(
+        labels_save_path
+    )
+
+
+    print(
+        "\nImage names:"
+    )
+
+
+    print(
+        names_save_path
     )
 
 
@@ -1280,6 +1560,5 @@ if __name__ == "__main__":
     run_ml_benchmark(
         X=X_topological_features,
         y=y_experimental_classes,
-        output_dir=PROCESSED_DIR
+        output_dir=CLASSIFICATION_OUTPUT_DIR
     )
-

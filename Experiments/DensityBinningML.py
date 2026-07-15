@@ -7,11 +7,14 @@ Pipeline:
     2. Convert each image to binary using Otsu thresholding
     3. Compute a density filtration using KDTree
     4. Compute persistent homology with Cripser
-    5. Apply persistence binning
-    6. Build an 18-dimensional feature vector for each image
-    7. Train a Linear SVM
-    8. Train a Neural Network
-    9. Calculate accuracy, F1 score, and confusion matrices
+    5. Save persistent homology for each image
+    6. Apply persistence binning
+    7. Build an 18-dimensional feature vector for each image
+    8. Save vectorization results
+    9. Train a Linear SVM
+    10. Train a Neural Network
+    11. Calculate accuracy, F1 score, and confusion matrices
+    12. Save classification results
 
 @author: Gabriel
 """
@@ -86,7 +89,10 @@ def density_filtration(
         Density filtration image.
     """
 
-    # Get image dimensions
+    # ---------------------------------------------------------------
+    # GET IMAGE DIMENSIONS
+    # ---------------------------------------------------------------
+
     height, width = binary_image.shape
 
 
@@ -99,7 +105,10 @@ def density_filtration(
     )
 
 
-    # Make sure foreground pixels exist
+    # ---------------------------------------------------------------
+    # MAKE SURE FOREGROUND PIXELS EXIST
+    # ---------------------------------------------------------------
+
     if len(points) == 0:
 
         raise ValueError(
@@ -227,9 +236,7 @@ def compute_density_ph(
             Density filtration image.
 
         ph_density : numpy.ndarray
-            Raw Cripser persistence diagram containing:
-
-                [dimension, birth, death]
+            Raw Cripser persistence diagram.
     """
 
     # ---------------------------------------------------------------
@@ -501,7 +508,10 @@ def build_persistence_binning_vector(
         )
 
 
-        # Flatten the 2D grid
+        # -----------------------------------------------------------
+        # FLATTEN THE 2D GRID
+        # -----------------------------------------------------------
+
         feature_blocks.append(
             bin_matrix.flatten()
         )
@@ -525,7 +535,7 @@ def build_persistence_binning_vector(
 
 def build_density_dataset(
     image_paths,
-    output_dir,
+    ph_output_dir,
     max_dist=5,
     n_bins=3
 ):
@@ -537,8 +547,8 @@ def build_density_dataset(
         1. Load the preprocessed image
         2. Apply Otsu thresholding
         3. Create a binary image
-        4. Compute the KDTree density filtration
-        5. Compute persistent homology
+        4. Compute or load density persistent homology
+        5. Save persistent homology if newly computed
         6. Separate H0 and H1
         7. Apply persistence binning
         8. Store the resulting feature vector
@@ -548,6 +558,9 @@ def build_density_dataset(
     ----------
     image_paths : list
         Paths to preprocessed microscopy images.
+
+    ph_output_dir : pathlib.Path
+        Folder used to save and load persistent homology results.
 
     max_dist : float, optional
         Radius used for density calculations.
@@ -572,23 +585,16 @@ def build_density_dataset(
         image_names : numpy.ndarray
             Image filenames.
     """
-    
+
     # ---------------------------------------------------------------
-    # CREATE PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # MAKE SURE PH OUTPUT DIRECTORY EXISTS
     # ---------------------------------------------------------------
-    
-    output_dir = Path(
-        output_dir
+
+    ph_output_dir = Path(
+        ph_output_dir
     )
-    
-    
-    ph_output_dir = (
-        output_dir
-        /
-        "saved_persistent_homology"
-    )
-    
-    
+
+
     ph_output_dir.mkdir(
         parents=True,
         exist_ok=True
@@ -628,7 +634,10 @@ def build_density_dataset(
     )
 
 
-    # Fixed ranges shared by every image
+    # ---------------------------------------------------------------
+    # DEFINE FIXED RANGES SHARED BY EVERY IMAGE
+    # ---------------------------------------------------------------
+
     birth_range = (
         0.0,
         float(
@@ -670,7 +679,7 @@ def build_density_dataset(
 
 
     # ---------------------------------------------------------------
-    # CREATE DATASET CONTAINERS
+    # CREATE DATASET STORAGE LISTS
     # ---------------------------------------------------------------
 
     X = []
@@ -722,7 +731,7 @@ def build_density_dataset(
 
 
         # -----------------------------------------------------------
-        # APPLY OTSU THRESHOLDING
+        # CHECK FOR CONSTANT IMAGE
         # -----------------------------------------------------------
 
         if (
@@ -736,6 +745,10 @@ def build_density_dataset(
                 f"{path.name}"
             )
 
+
+        # -----------------------------------------------------------
+        # APPLY OTSU THRESHOLDING
+        # -----------------------------------------------------------
 
         threshold_value = filters.threshold_otsu(
             img_grayscale
@@ -766,42 +779,53 @@ def build_density_dataset(
         # -----------------------------------------------------------
         # DEFINE PERSISTENT HOMOLOGY SAVE PATH
         # -----------------------------------------------------------
-        
+
         ph_save_path = (
             ph_output_dir
             /
             f"{path.stem}_density_ph.npy"
         )
-        
-        
+
+
         # -----------------------------------------------------------
         # LOAD SAVED PH IF IT ALREADY EXISTS
         # -----------------------------------------------------------
-        
+
         if ph_save_path.exists():
-        
+
             print(
                 "Loading previously saved density "
                 "persistent homology..."
             )
-        
+
+
             ph_density = np.load(
                 ph_save_path
             )
-        
-        
+
+
+            print(
+                "Loaded from:"
+            )
+
+
+            print(
+                ph_save_path
+            )
+
+
         # -----------------------------------------------------------
         # OTHERWISE COMPUTE DENSITY FILTRATION AND SAVE PH
         # -----------------------------------------------------------
-        
+
         else:
-        
+
             print(
                 "Computing density filtration and "
                 "persistent homology..."
             )
-        
-        
+
+
             (
                 density_img,
                 ph_density
@@ -809,35 +833,36 @@ def build_density_dataset(
                 binary_image=binary_img,
                 max_dist=max_dist
             )
-        
-        
+
+
             print(
                 "Density filtration minimum:",
                 density_img.min()
             )
-        
-        
+
+
             print(
                 "Density filtration maximum:",
                 density_img.max()
             )
-        
-        
+
+
             np.save(
                 ph_save_path,
                 ph_density
             )
-        
-        
+
+
             print(
                 "Persistent homology saved to:"
             )
-        
+
+
             print(
                 ph_save_path
             )
-        
-        
+
+
         print(
             "Raw persistence diagram shape:",
             ph_density.shape
@@ -993,8 +1018,24 @@ def run_ml_benchmark(
 
     Both models use standardized persistence-binning feature vectors.
 
-    Accuracy, F1 score, and confusion matrices are calculated.
+    Accuracy, F1 score, and confusion matrices are calculated
+    and saved.
     """
+
+    # ---------------------------------------------------------------
+    # MAKE SURE CLASSIFICATION OUTPUT DIRECTORY EXISTS
+    # ---------------------------------------------------------------
+
+    output_dir = Path(
+        output_dir
+    )
+
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
 
     # ---------------------------------------------------------------
     # DEFINE MODELS
@@ -1293,6 +1334,35 @@ def run_ml_benchmark(
 
     plt.tight_layout()
 
+
+    # ---------------------------------------------------------------
+    # SAVE CONFUSION MATRIX FIGURE
+    # ---------------------------------------------------------------
+
+    confusion_matrix_path = (
+        output_dir
+        /
+        "density_confusion_matrices.png"
+    )
+
+
+    plt.savefig(
+        confusion_matrix_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+
+    print(
+        "\nConfusion matrix figure saved to:"
+    )
+
+
+    print(
+        confusion_matrix_path
+    )
+
+
     plt.show()
 
 
@@ -1332,9 +1402,7 @@ def run_ml_benchmark(
     # ---------------------------------------------------------------
 
     csv_path = (
-        Path(
-            output_dir
-        )
+        output_dir
         /
         "density_persistence_binning_ml_metrics.csv"
     )
@@ -1347,8 +1415,12 @@ def run_ml_benchmark(
 
 
     print(
-        f"\nMetrics saved to:\n"
-        f"{csv_path}"
+        "\nMetrics saved to:"
+    )
+
+
+    print(
+        csv_path
     )
 
 
@@ -1359,12 +1431,142 @@ def run_ml_benchmark(
 if __name__ == "__main__":
 
     # ---------------------------------------------------------------
-    # FOLDER CONTAINING PREPROCESSED IMAGES
+    # INPUT FOLDER: PREPROCESSED IMAGES
     # ---------------------------------------------------------------
 
     PROCESSED_DIR = Path(
-        r"C:\Users\chloe\OneDrive - Simpson College"
-        r"\IMAGES2.0\All Images\preprocessed_images"
+        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\preprocessed_images"
+    )
+
+
+    # ---------------------------------------------------------------
+    # BASE RESULTS FOLDER
+    # ---------------------------------------------------------------
+
+    BASE_RESULTS_DIR = Path(
+        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\Results"
+    )
+
+
+    # ---------------------------------------------------------------
+    # FILTRATION NAME
+    # ---------------------------------------------------------------
+
+    FILTRATION_NAME = "Density"
+
+
+    # ---------------------------------------------------------------
+    # FILTRATION-SPECIFIC RESULTS FOLDER
+    # ---------------------------------------------------------------
+
+    RESULTS_DIR = (
+        BASE_RESULTS_DIR
+        /
+        FILTRATION_NAME
+    )
+
+
+    # ---------------------------------------------------------------
+    # PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    PH_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Persistent_Homology"
+    )
+
+
+    # ---------------------------------------------------------------
+    # VECTORIZATION OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    VECTORIZATION_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Vectorization"
+    )
+
+
+    # ---------------------------------------------------------------
+    # CLASSIFICATION OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    CLASSIFICATION_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Classification"
+    )
+
+
+    # ---------------------------------------------------------------
+    # CREATE OUTPUT FOLDERS
+    # ---------------------------------------------------------------
+
+    PH_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    VECTORIZATION_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    CLASSIFICATION_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    # ---------------------------------------------------------------
+    # REPORT OUTPUT FOLDERS
+    # ---------------------------------------------------------------
+
+    print(
+        "\n============================================"
+    )
+
+
+    print(
+        "OUTPUT FOLDERS"
+    )
+
+
+    print(
+        "============================================"
+    )
+
+
+    print(
+        "Persistent Homology:"
+    )
+
+
+    print(
+        PH_OUTPUT_DIR
+    )
+
+
+    print(
+        "\nVectorization:"
+    )
+
+
+    print(
+        VECTORIZATION_OUTPUT_DIR
+    )
+
+
+    print(
+        "\nClassification:"
+    )
+
+
+    print(
+        CLASSIFICATION_OUTPUT_DIR
     )
 
 
@@ -1392,7 +1594,7 @@ if __name__ == "__main__":
 
 
     print(
-        f"Found {len(image_paths)} "
+        f"\nFound {len(image_paths)} "
         f"preprocessed images."
     )
 
@@ -1423,7 +1625,7 @@ if __name__ == "__main__":
         image_names
     ) = build_density_dataset(
         image_paths=image_paths,
-        output_dir=PROCESSED_DIR,
+        ph_output_dir=PH_OUTPUT_DIR,
         max_dist=MAX_DIST,
         n_bins=N_BINS
     )
@@ -1509,39 +1711,105 @@ if __name__ == "__main__":
 
 
     # ---------------------------------------------------------------
+    # DEFINE VECTORIZATION SAVE PATHS
+    # ---------------------------------------------------------------
+
+    features_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        "density_18d_"
+        "persistence_binning_features.npy"
+    )
+
+
+    labels_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        "density_"
+        "persistence_binning_labels.npy"
+    )
+
+
+    names_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        "density_"
+        "persistence_binning_names.npy"
+    )
+
+
+    # ---------------------------------------------------------------
     # SAVE FEATURE MATRIX
     # ---------------------------------------------------------------
 
     np.save(
-        PROCESSED_DIR
-        /
-        "density_18d_"
-        "persistence_binning_features.npy",
+        features_save_path,
         X_topological_features
     )
 
 
+    # ---------------------------------------------------------------
+    # SAVE LABELS
+    # ---------------------------------------------------------------
+
     np.save(
-        PROCESSED_DIR
-        /
-        "density_"
-        "persistence_binning_labels.npy",
+        labels_save_path,
         y_experimental_classes
     )
 
 
+    # ---------------------------------------------------------------
+    # SAVE IMAGE NAMES
+    # ---------------------------------------------------------------
+
     np.save(
-        PROCESSED_DIR
-        /
-        "density_"
-        "persistence_binning_names.npy",
+        names_save_path,
         image_names
     )
 
 
     print(
-        "\nDensity persistence-binning "
-        "feature arrays saved."
+        "\n============================================"
+    )
+
+
+    print(
+        "VECTORIZATION RESULTS SAVED"
+    )
+
+
+    print(
+        "============================================"
+    )
+
+
+    print(
+        "Features:"
+    )
+
+
+    print(
+        features_save_path
+    )
+
+
+    print(
+        "\nLabels:"
+    )
+
+
+    print(
+        labels_save_path
+    )
+
+
+    print(
+        "\nImage names:"
+    )
+
+
+    print(
+        names_save_path
     )
 
 
@@ -1567,5 +1835,5 @@ if __name__ == "__main__":
     run_ml_benchmark(
         X=X_topological_features,
         y=y_experimental_classes,
-        output_dir=PROCESSED_DIR
+        output_dir=CLASSIFICATION_OUTPUT_DIR
     )

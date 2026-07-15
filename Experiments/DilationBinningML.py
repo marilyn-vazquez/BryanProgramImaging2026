@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Closing Filtration Persistence Binning Machine Learning Experiment
+Dilation Filtration Persistence Binning Machine Learning Experiment
 
 Pipeline:
     1. Load preprocessed microscopy images
     2. Convert each image to binary using a fixed threshold
-    3. Apply a morphological filtration using increasing square
+    3. Apply a dilation filtration using increasing square
        structuring elements
     4. Compute persistent homology
-    5. Apply persistence binning
-    6. Build an 18-dimensional feature vector for each image
-    7. Train a Linear SVM
-    8. Train a Neural Network
-    9. Calculate accuracy, F1 score, and confusion matrices
+    5. Save persistent homology for each image
+    6. Apply persistence binning
+    7. Build an 18-dimensional feature vector for each image
+    8. Save vectorization results
+    9. Train a Linear SVM
+    10. Train a Neural Network
+    11. Calculate accuracy, F1 score, and confusion matrices
+    12. Save classification results
 
 @author: Gabriel
 """
@@ -41,6 +44,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
+
 
 # =====================================================================
 # 1. EXPERIMENT SETTINGS
@@ -105,7 +109,9 @@ PERSISTENCE_RANGE = (
 # 2. BINARY THRESHOLDING
 # =====================================================================
 
-def find(condition):
+def find(
+    condition
+):
     """
     Find indices in an array satisfying a given condition.
 
@@ -123,6 +129,7 @@ def find(condition):
     res = np.nonzero(
         condition
     )
+
 
     return res
 
@@ -196,23 +203,6 @@ def erosion(
     Perform morphological erosion on a binary image.
 
     Erosion removes boundary pixels and reduces foreground structures.
-
-    Parameters
-    ----------
-    input_np_array : numpy.ndarray
-        Binary input image.
-
-    input_list_of_points : list
-        Structuring element coordinate offsets.
-
-    minimal_pixel_value : int, optional
-        Background pixel value.
-        Default is 0.
-
-    Returns
-    -------
-    numpy.ndarray
-        Eroded binary image.
     """
 
     input_np_array_shape = np.shape(
@@ -232,7 +222,6 @@ def erosion(
         for j in range(
             input_np_array_shape[1]
         ):
-
 
             if (
                 input_np_array[
@@ -259,7 +248,6 @@ def erosion(
                     input_list_of_points
                 )
             ):
-
 
                 m = (
                     i
@@ -322,23 +310,6 @@ def dilation(
     Perform morphological dilation on a binary image.
 
     Dilation expands foreground structures.
-
-    Parameters
-    ----------
-    input_np_array : numpy.ndarray
-        Binary input image.
-
-    input_list_of_points : list
-        Structuring element coordinate offsets.
-
-    maximal_pixel_value : int, optional
-        Foreground pixel value.
-        Default is 1.
-
-    Returns
-    -------
-    numpy.ndarray
-        Dilated binary image.
     """
 
     input_np_array_shape = np.shape(
@@ -358,7 +329,6 @@ def dilation(
         for j in range(
             input_np_array_shape[1]
         ):
-
 
             if (
                 input_np_array[
@@ -385,7 +355,6 @@ def dilation(
                     input_list_of_points
                 )
             ):
-
 
                 m = (
                     i
@@ -478,16 +447,6 @@ def get_rectangle_coordinates(
 ):
     """
     Generate coordinate offsets for a rectangular structuring element.
-
-    Parameters
-    ----------
-    input_np_array : numpy.ndarray
-        Array representing the dimensions of the structuring element.
-
-    Returns
-    -------
-    list
-        Coordinate offsets relative to the center pixel.
     """
 
     input_np_array_shape = np.shape(
@@ -520,7 +479,6 @@ def get_rectangle_coordinates(
             input_np_array_shape[1]
         ):
 
-
             output_list.append(
 
                 np.array(
@@ -548,16 +506,6 @@ def get_square_SE_list(
         3 x 3
         ...
         maximal_SE_lengths x maximal_SE_lengths
-
-    Parameters
-    ----------
-    maximal_SE_lengths : int
-        Maximum square side length.
-
-    Returns
-    -------
-    list
-        Collection of square structuring elements.
     """
 
     kernel_list = []
@@ -567,7 +515,6 @@ def get_square_SE_list(
         2,
         maximal_SE_lengths + 1
     ):
-
 
         kernel_list.append(
 
@@ -599,15 +546,6 @@ def persistence_of_img(
     """
     Compute persistent homology of a filtration image.
 
-    Parameters
-    ----------
-    img : numpy.ndarray
-        Input filtration image.
-
-    maxdim : int, optional
-        Maximum homology dimension.
-        Default is 1.
-
     Returns
     -------
     list
@@ -632,15 +570,12 @@ def persistence_of_img(
         "compute_ph"
     ):
 
-
         ph = cripser.compute_ph(
             img,
             maxdim=maxdim
         )
 
-
     else:
-
 
         ph = cripser.computePH(
             img,
@@ -681,7 +616,7 @@ def persistence_of_img(
 def persistence_of_morph_filtration(
     img,
     kernel_list,
-    morph_type="closing"
+    morph_type="dilation"
 ):
     """
     Compute persistent homology from a morphological filtration.
@@ -689,30 +624,11 @@ def persistence_of_morph_filtration(
     The selected morphological operation is applied using
     structuring elements of increasing size.
 
-    Parameters
-    ----------
-    img : numpy.ndarray
-        Binary input image.
+    Supported values:
 
-    kernel_list : list
-        Collection of increasing structuring elements.
-
-    morph_type : str
-        Morphological operation.
-
-        Supported values:
-
-            "closing"
-            "erosion"
-            "dilation"
-
-    Returns
-    -------
-    list
-        Persistence diagrams for:
-
-            H0
-            H1
+        "closing"
+        "erosion"
+        "dilation"
     """
 
     # ---------------------------------------------------------------
@@ -743,9 +659,7 @@ def persistence_of_morph_filtration(
 
     for the_kernel in kernel_list:
 
-
         if morph_type == "closing":
-
 
             morphed_img = closing(
                 input_np_array=img,
@@ -755,7 +669,6 @@ def persistence_of_morph_filtration(
 
         elif morph_type == "erosion":
 
-
             morphed_img = erosion(
                 input_np_array=img,
                 input_list_of_points=the_kernel
@@ -763,7 +676,6 @@ def persistence_of_morph_filtration(
 
 
         elif morph_type == "dilation":
-
 
             morphed_img = dilation(
                 input_np_array=img,
@@ -773,7 +685,6 @@ def persistence_of_morph_filtration(
 
         else:
 
-
             raise ValueError(
                 "morph_type must be "
                 "'closing', 'erosion', or 'dilation'"
@@ -782,6 +693,7 @@ def persistence_of_morph_filtration(
 
         # Add this morphological scale
         # to the accumulated filtration image
+
         img_buff = (
             img_buff
             +
@@ -865,7 +777,6 @@ def build_persistence_binning_vector(
 
     for diagram in persistence_diagrams:
 
-
         diagram = np.asarray(
             diagram,
             dtype=np.float64
@@ -877,7 +788,6 @@ def build_persistence_binning_vector(
         # -----------------------------------------------------------
 
         if diagram.size == 0:
-
 
             bin_matrix = np.zeros(
                 (
@@ -923,7 +833,6 @@ def build_persistence_binning_vector(
         if len(
             diagram_finite
         ) == 0:
-
 
             bin_matrix = np.zeros(
                 (
@@ -1022,7 +931,7 @@ def build_persistence_binning_vector(
 
 def build_morphology_dataset(
     image_paths,
-    output_dir,
+    ph_output_dir,
     morph_type,
     threshold=0.5,
     max_se_length=20,
@@ -1035,44 +944,27 @@ def build_morphology_dataset(
 
         1. Load the preprocessed image
         2. Convert the image to binary
-        3. Apply the selected morphological filtration
-        4. Compute persistent homology
+        3. Compute or load the selected morphology PH
+        4. Save persistent homology if newly computed
         5. Apply persistence binning
         6. Store the resulting feature vector
         7. Assign the experimental class label
-
-    Returns
-    -------
-    tuple
-        X : numpy.ndarray
-            Feature matrix.
-
-        y : numpy.ndarray
-            Class labels.
-
-        image_names : numpy.ndarray
-            Image filenames.
     """
+
     # ---------------------------------------------------------------
-    # CREATE PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # MAKE SURE PH OUTPUT DIRECTORY EXISTS
     # ---------------------------------------------------------------
-    
-    output_dir = Path(
-        output_dir
+
+    ph_output_dir = Path(
+        ph_output_dir
     )
-    
-    
-    ph_output_dir = (
-        output_dir
-        /
-        "saved_persistent_homology"
-    )
-    
-    
+
+
     ph_output_dir.mkdir(
         parents=True,
         exist_ok=True
     )
+
 
     # ---------------------------------------------------------------
     # CREATE STRUCTURING ELEMENTS ONCE
@@ -1110,7 +1002,7 @@ def build_morphology_dataset(
 
 
     # ---------------------------------------------------------------
-    # CREATE DATASET CONTAINERS
+    # CREATE DATASET STORAGE LISTS
     # ---------------------------------------------------------------
 
     X = []
@@ -1128,7 +1020,6 @@ def build_morphology_dataset(
         image_paths,
         start=1
     ):
-
 
         path = Path(
             path
@@ -1182,95 +1073,108 @@ def build_morphology_dataset(
         )
 
 
-    # -----------------------------------------------------------
-    # DEFINE PERSISTENT HOMOLOGY SAVE PATH
-    # -----------------------------------------------------------
-    
-    ph_save_path = (
-        ph_output_dir
-        /
-        f"{path.stem}_{morph_type}_ph.npz"
-    )
-    
-    
-    # -----------------------------------------------------------
-    # LOAD SAVED PH IF IT ALREADY EXISTS
-    # -----------------------------------------------------------
-    
-    if ph_save_path.exists():
-    
-        print(
-            f"Loading previously saved {morph_type} "
-            "persistent homology..."
-        )
-    
-    
-        saved_ph = np.load(
-            ph_save_path
-        )
-    
-    
-        persistence_0 = saved_ph[
-            "H0"
-        ]
-    
-    
-        persistence_1 = saved_ph[
-            "H1"
-        ]
-    
-    
-        persistence_diagrams = [
-            persistence_0,
-            persistence_1
-        ]
-    
-    
-    # -----------------------------------------------------------
-    # OTHERWISE COMPUTE AND SAVE PH
-    # -----------------------------------------------------------
-    
-    else:
-    
-        print(
-            f"Computing {morph_type} filtration and "
-            "persistent homology..."
-        )
-    
-    
-        persistence_diagrams = persistence_of_morph_filtration(
-            img=binary_img,
-            kernel_list=kernel_list,
-            morph_type=morph_type
-        )
-    
-    
-        persistence_0 = persistence_diagrams[
-            0
-        ]
-    
-    
-        persistence_1 = persistence_diagrams[
-            1
-        ]
-    
-    
-        np.savez_compressed(
-            ph_save_path,
-            H0=persistence_0,
-            H1=persistence_1
-        )
-    
-    
-        print(
-            "Persistent homology saved to:"
-        )
-    
-    
-        print(
-            ph_save_path
+        # -----------------------------------------------------------
+        # DEFINE PERSISTENT HOMOLOGY SAVE PATH
+        # -----------------------------------------------------------
+
+        ph_save_path = (
+            ph_output_dir
+            /
+            f"{path.stem}_{morph_type}_ph.npz"
         )
 
+
+        # -----------------------------------------------------------
+        # LOAD SAVED PH IF IT ALREADY EXISTS
+        # -----------------------------------------------------------
+
+        if ph_save_path.exists():
+
+            print(
+                f"Loading previously saved {morph_type} "
+                "persistent homology..."
+            )
+
+
+            with np.load(
+                ph_save_path
+            ) as saved_ph:
+
+                persistence_0 = saved_ph[
+                    "H0"
+                ]
+
+
+                persistence_1 = saved_ph[
+                    "H1"
+                ]
+
+
+            persistence_diagrams = [
+                persistence_0,
+                persistence_1
+            ]
+
+
+            print(
+                "Loaded from:"
+            )
+
+
+            print(
+                ph_save_path
+            )
+
+
+        # -----------------------------------------------------------
+        # OTHERWISE COMPUTE AND SAVE PH
+        # -----------------------------------------------------------
+
+        else:
+
+            print(
+                f"Computing {morph_type} filtration and "
+                "persistent homology..."
+            )
+
+
+            persistence_diagrams = persistence_of_morph_filtration(
+                img=binary_img,
+                kernel_list=kernel_list,
+                morph_type=morph_type
+            )
+
+
+            persistence_0 = persistence_diagrams[
+                0
+            ]
+
+
+            persistence_1 = persistence_diagrams[
+                1
+            ]
+
+
+            np.savez_compressed(
+                ph_save_path,
+                H0=persistence_0,
+                H1=persistence_1
+            )
+
+
+            print(
+                "Persistent homology saved to:"
+            )
+
+
+            print(
+                ph_save_path
+            )
+
+
+        # -----------------------------------------------------------
+        # REPORT PERSISTENCE DIAGRAM INFORMATION
+        # -----------------------------------------------------------
 
         print(
             "H0 intervals:",
@@ -1337,18 +1241,15 @@ def build_morphology_dataset(
 
         if "microgravity" in filename_lower:
 
-
             label = 1
 
 
         elif "control" in filename_lower:
 
-
             label = 0
 
 
         else:
-
 
             raise ValueError(
                 "Could not determine class label "
@@ -1409,7 +1310,25 @@ def run_ml_benchmark(
 
         1. Linear Support Vector Machine
         2. Multilayer Perceptron Neural Network
+
+    Accuracy, F1 score, and confusion matrices are calculated
+    and saved.
     """
+
+    # ---------------------------------------------------------------
+    # MAKE SURE CLASSIFICATION OUTPUT DIRECTORY EXISTS
+    # ---------------------------------------------------------------
+
+    output_dir = Path(
+        output_dir
+    )
+
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
 
     # ---------------------------------------------------------------
     # DEFINE MODELS
@@ -1507,7 +1426,6 @@ def run_ml_benchmark(
         model_name,
         classifier
     ) in models:
-
 
         print(
             "\n============================================"
@@ -1676,7 +1594,6 @@ def run_ml_benchmark(
         confusion_records
     ):
 
-
         display = ConfusionMatrixDisplay(
             confusion_matrix=cm,
             display_labels=[
@@ -1699,6 +1616,35 @@ def run_ml_benchmark(
 
 
     plt.tight_layout()
+
+
+    # ---------------------------------------------------------------
+    # SAVE CONFUSION MATRIX FIGURE
+    # ---------------------------------------------------------------
+
+    confusion_matrix_path = (
+        output_dir
+        /
+        f"{morph_type}_confusion_matrices.png"
+    )
+
+
+    plt.savefig(
+        confusion_matrix_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+
+    print(
+        "\nConfusion matrix figure saved to:"
+    )
+
+
+    print(
+        confusion_matrix_path
+    )
+
 
     plt.show()
 
@@ -1740,9 +1686,7 @@ def run_ml_benchmark(
     # ---------------------------------------------------------------
 
     csv_path = (
-        Path(
-            output_dir
-        )
+        output_dir
         /
         f"{morph_type}_"
         "persistence_binning_ml_metrics.csv"
@@ -1756,8 +1700,12 @@ def run_ml_benchmark(
 
 
     print(
-        f"\nMetrics saved to:\n"
-        f"{csv_path}"
+        "\nMetrics saved to:"
+    )
+
+
+    print(
+        csv_path
     )
 
 
@@ -1768,12 +1716,142 @@ def run_ml_benchmark(
 if __name__ == "__main__":
 
     # ---------------------------------------------------------------
-    # FOLDER CONTAINING PREPROCESSED IMAGES
+    # INPUT FOLDER: PREPROCESSED IMAGES
     # ---------------------------------------------------------------
 
     PROCESSED_DIR = Path(
-        r"C:\Users\chloe\OneDrive - Simpson College"
-        r"\IMAGES2.0\All Images\preprocessed_images"
+        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\preprocessed_images"
+    )
+
+
+    # ---------------------------------------------------------------
+    # BASE RESULTS FOLDER
+    # ---------------------------------------------------------------
+
+    BASE_RESULTS_DIR = Path(
+        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\Results"
+    )
+
+
+    # ---------------------------------------------------------------
+    # FILTRATION NAME
+    # ---------------------------------------------------------------
+
+    FILTRATION_NAME = "Dilation"
+
+
+    # ---------------------------------------------------------------
+    # FILTRATION-SPECIFIC RESULTS FOLDER
+    # ---------------------------------------------------------------
+
+    RESULTS_DIR = (
+        BASE_RESULTS_DIR
+        /
+        FILTRATION_NAME
+    )
+
+
+    # ---------------------------------------------------------------
+    # PERSISTENT HOMOLOGY OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    PH_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Persistent_Homology"
+    )
+
+
+    # ---------------------------------------------------------------
+    # VECTORIZATION OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    VECTORIZATION_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Vectorization"
+    )
+
+
+    # ---------------------------------------------------------------
+    # CLASSIFICATION OUTPUT FOLDER
+    # ---------------------------------------------------------------
+
+    CLASSIFICATION_OUTPUT_DIR = (
+        RESULTS_DIR
+        /
+        "Classification"
+    )
+
+
+    # ---------------------------------------------------------------
+    # CREATE OUTPUT FOLDERS
+    # ---------------------------------------------------------------
+
+    PH_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    VECTORIZATION_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    CLASSIFICATION_OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+    # ---------------------------------------------------------------
+    # REPORT OUTPUT FOLDERS
+    # ---------------------------------------------------------------
+
+    print(
+        "\n============================================"
+    )
+
+
+    print(
+        "OUTPUT FOLDERS"
+    )
+
+
+    print(
+        "============================================"
+    )
+
+
+    print(
+        "Persistent Homology:"
+    )
+
+
+    print(
+        PH_OUTPUT_DIR
+    )
+
+
+    print(
+        "\nVectorization:"
+    )
+
+
+    print(
+        VECTORIZATION_OUTPUT_DIR
+    )
+
+
+    print(
+        "\nClassification:"
+    )
+
+
+    print(
+        CLASSIFICATION_OUTPUT_DIR
     )
 
 
@@ -1794,7 +1872,6 @@ if __name__ == "__main__":
 
     if not image_paths:
 
-
         raise FileNotFoundError(
             f"Could not find any preprocessed images in:\n"
             f"{PROCESSED_DIR}"
@@ -1802,13 +1879,13 @@ if __name__ == "__main__":
 
 
     print(
-        f"Found {len(image_paths)} "
+        f"\nFound {len(image_paths)} "
         f"preprocessed images."
     )
 
 
     # ---------------------------------------------------------------
-    # BUILD MORPHOLOGY PERSISTENCE-BINNING DATASET
+    # BUILD DILATION PERSISTENCE-BINNING DATASET
     # ---------------------------------------------------------------
 
     print(
@@ -1833,7 +1910,7 @@ if __name__ == "__main__":
         image_names
     ) = build_morphology_dataset(
         image_paths=image_paths,
-        output_dir=PROCESSED_DIR,
+        ph_output_dir=PH_OUTPUT_DIR,
         morph_type=MORPH_TYPE,
         threshold=THRESHOLD,
         max_se_length=MAX_SE_LENGTH,
@@ -1913,7 +1990,6 @@ if __name__ == "__main__":
         expected_features
     ):
 
-
         raise ValueError(
             "Unexpected persistence-binning vector length. "
             f"Expected {expected_features}, but received "
@@ -1922,39 +1998,105 @@ if __name__ == "__main__":
 
 
     # ---------------------------------------------------------------
+    # DEFINE VECTORIZATION SAVE PATHS
+    # ---------------------------------------------------------------
+
+    features_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        f"{MORPH_TYPE}_18d_"
+        "persistence_binning_features.npy"
+    )
+
+
+    labels_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        f"{MORPH_TYPE}_"
+        "persistence_binning_labels.npy"
+    )
+
+
+    names_save_path = (
+        VECTORIZATION_OUTPUT_DIR
+        /
+        f"{MORPH_TYPE}_"
+        "persistence_binning_names.npy"
+    )
+
+
+    # ---------------------------------------------------------------
     # SAVE FEATURE MATRIX
     # ---------------------------------------------------------------
 
     np.save(
-        PROCESSED_DIR
-        /
-        f"{MORPH_TYPE}_18d_"
-        "persistence_binning_features.npy",
+        features_save_path,
         X_topological_features
     )
 
 
+    # ---------------------------------------------------------------
+    # SAVE LABELS
+    # ---------------------------------------------------------------
+
     np.save(
-        PROCESSED_DIR
-        /
-        f"{MORPH_TYPE}_"
-        "persistence_binning_labels.npy",
+        labels_save_path,
         y_experimental_classes
     )
 
 
+    # ---------------------------------------------------------------
+    # SAVE IMAGE NAMES
+    # ---------------------------------------------------------------
+
     np.save(
-        PROCESSED_DIR
-        /
-        f"{MORPH_TYPE}_"
-        "persistence_binning_names.npy",
+        names_save_path,
         image_names
     )
 
 
     print(
-        f"\n{MORPH_TYPE.capitalize()} "
-        "persistence-binning feature arrays saved."
+        "\n============================================"
+    )
+
+
+    print(
+        "VECTORIZATION RESULTS SAVED"
+    )
+
+
+    print(
+        "============================================"
+    )
+
+
+    print(
+        "Features:"
+    )
+
+
+    print(
+        features_save_path
+    )
+
+
+    print(
+        "\nLabels:"
+    )
+
+
+    print(
+        labels_save_path
+    )
+
+
+    print(
+        "\nImage names:"
+    )
+
+
+    print(
+        names_save_path
     )
 
 
@@ -1980,7 +2122,6 @@ if __name__ == "__main__":
     run_ml_benchmark(
         X=X_topological_features,
         y=y_experimental_classes,
-        output_dir=PROCESSED_DIR,
+        output_dir=CLASSIFICATION_OUTPUT_DIR,
         morph_type=MORPH_TYPE
     )
-
