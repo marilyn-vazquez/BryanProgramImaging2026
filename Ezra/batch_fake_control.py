@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Jul 20 14:31:49 2026
-
-@author: ezra.decleene
-"""
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
