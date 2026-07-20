@@ -1,9 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jul 20 14:31:49 2026
+
+@author: ezra.decleene
+"""
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-def generate_straight_line(start_point, general_direction, total_length, num_points=2):
-    """Generates a straight 3D line segment extending from a start point along a direction vector."""
+def generate_straight_line(start_point, general_direction, total_length, num_points=40):
+    """Generates a straight 3D line extending from a start point along a direction."""
     start_point = np.array(start_point, dtype=float)
     base_dir = np.array(general_direction, dtype=float)
     base_dir /= np.linalg.norm(base_dir)
@@ -13,12 +20,12 @@ def generate_straight_line(start_point, general_direction, total_length, num_poi
     cx = start_point[0] + base_dir[0] * t
     cy = start_point[1] + base_dir[1] * t
     cz = start_point[2] + base_dir[2] * t
-        
+
     return cx, cy, cz
 
 
 # --- Setup Output Folder ---
-output_folder = r"C:/Users/ezra.decleene/Documents/BryanProgram2026/Micro_Fixed"
+output_folder = r"C:/Users/ezra.decleene/Documents/BryanProgram2026/Micro_Hemisphere"
 os.makedirs(output_folder, exist_ok=True)
 
 # --- Editable Parameters ---
@@ -100,15 +107,18 @@ for img_num in range(1, num_images + 1):
             total_length=rand_length
         )
         
-        ax.plot(x, y, z, color='white', linewidth=1.2, zorder=10)
+        # Intense white for one half, soft grayish-white for the other half
+        line_color = '#FFFFFF' if cand_z > 0 else '#888888'
+        
+        ax.plot(x, y, z, color=line_color, linewidth=1.2, zorder=10)
 
     ax.set_box_aspect([1, 1, 2]) 
     ax.view_init(elev=0, azim=0, roll=90)
     ax.grid(False)
     ax.axis('off')
 
-    filepath = os.path.join(output_folder, f"straight_line_no_overlap_{img_num:03d}.png")
-    plt.savefig(filepath, bbox_inches='tight', dpi=150, facecolor=fig.get_facecolor())    
+    filepath = os.path.join(output_folder, f"fake_micro_{img_num:03d}.png")
+    plt.savefig(filepath, bbox_inches='tight', dpi=150, facecolor=fig.get_facecolor())
     plt.close(fig)
 
 print("Straight line images generation complete!")
