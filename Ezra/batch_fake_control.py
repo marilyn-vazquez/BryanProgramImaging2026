@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jul 20 14:31:49 2026
+
+@author: ezra.decleene
+"""
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -36,7 +43,7 @@ def generate_curvy_squiggle(start_point, general_direction, total_length, num_po
 
 
 # --- Setup Output Folder ---
-output_folder = r"C:/Users/ezra.decleene/Documents/BryanProgram2026/Control_Fixed"
+output_folder = r"C:/Users/ezra.decleene/Documents/BryanProgram2026/Control_Hemisphere"
 os.makedirs(output_folder, exist_ok=True)
 
 # --- Editable Parameters ---
@@ -122,14 +129,17 @@ for img_num in range(1, num_images + 1):
             amplitude=rand_amp          
         )
         
-        ax.plot(x, y, z, color='white', linewidth=1.2, zorder=10)
+        # Intense white for one half, soft grayish-white for the other half
+        line_color = '#FFFFFF' if cand_z > 0 else '#888888'
+        
+        ax.plot(x, y, z, color=line_color, linewidth=1.2, zorder=10)
 
     ax.set_box_aspect([1, 1, 2]) 
     ax.view_init(elev=0, azim=0, roll=90)
     ax.grid(False)
     ax.axis('off')
 
-    filepath = os.path.join(output_folder, f"squiggle_no_overlap_{img_num:03d}.png")
+    filepath = os.path.join(output_folder, f"fake_control{img_num:03d}.png")
     plt.savefig(filepath, bbox_inches='tight', dpi=150, facecolor=fig.get_facecolor())
     plt.close(fig)
 
