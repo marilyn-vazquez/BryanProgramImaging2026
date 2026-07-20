@@ -1,128 +1,74 @@
 # -*- coding: utf-8 -*-
 """
-Upper-Star Persistence Binning Machine Learning Experiment
+Upper-Star Persistence Binning Validation Experiment
 
 Pipeline:
-    1. Load preprocessed microscopy images
-    2. Compute upper-star persistent homology
-    3. Save persistent homology for each image
-    4. Apply persistence binning
-    5. Build an 18-dimensional feature vector for each image
-    6. Save vectorization results
-    7. Train a Linear SVM
-    8. Train a Neural Network
-    9. Calculate accuracy, F1 score, and confusion matrices
-    10. Save classification results
+    1. Load V2 preprocessed microscopy images
+    2. Load or compute upper-star persistent homology
+    3. Apply persistence binning
+    4. Save one 18-dimensional vector per image
+    5. Create an image-vector manifest
+    6. Save the combined machine-learning dataset
+    7. Run 100 stratified train/test splits
+    8. Train a Linear SVM and Neural Network during each run
+    9. Save Accuracy and F1 Score for all runs
+    10. Calculate the mean and standard deviation for each model
 
 @author: Gabriel
 """
 
 from pathlib import Path
-
+import cripser
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-
-import cripser
-
 from skimage import io
 from skimage.util import img_as_float
-
-from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    ConfusionMatrixDisplay,
-    f1_score
-)
-
+from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-
 # =====================================================================
 # 1. EXPERIMENT SETTINGS
 # =====================================================================
 
-# Number of bins along the birth and persistence axes
+FILTRATION_NAME = "Upper_Star"
+VECTORIZATION_METHOD = "Persistence_Binning"
+PREPROCESSING_VERSION = "V2"
+EXPERIMENT_FOLDER_NAME = "Upper_Star_Preprocessed_V2"
+
 N_BINS = 3
+BIRTH_RANGE = (0.0, 255.0)
+PERSISTENCE_RANGE = (0.0, 255.0)
 
+N_RUNS = 100
+TEST_SIZE = 0.20
 
-# Images are scaled to 0-255 before persistent homology
-BIRTH_RANGE = (
-    0.0,
-    255.0
-)
-
-
-PERSISTENCE_RANGE = (
-    0.0,
-    255.0
-)
+# Keep the neural-network initialization constant so that the main
+# difference between runs is the train/test split.
+MLP_RANDOM_STATE = 42
 
 
 # =====================================================================
 # 2. UPPER-STAR PERSISTENT HOMOLOGY
 # =====================================================================
 
-def compute_upper_star(
-    preprocessed_img
-):
+def compute_upper_star(preprocessed_img):
     """
-    Compute an upper-star persistence diagram from a
-    preprocessed grayscale image.
+    Compute upper-star persistent homology from a grayscale image.
 
-    The image intensity values are inverted so that bright
-    structures receive low filtration values and therefore
-    enter the filtration earlier.
-
-    Parameters
-    ----------
-    preprocessed_img : numpy.ndarray
-        Preprocessed grayscale image.
-
-    Returns
-    -------
-    numpy.ndarray
-        Raw Cripser persistence diagram.
+    Image intensities are inverted so that bright structures receive
+    lower filtration values and enter the filtration earlier.
     """
+    image = np.asarray(preprocessed_img, dtype=float)
+    inverted_image = image.max() - image
 
-    # ---------------------------------------------------------------
-    # INVERT IMAGE INTENSITIES
-    # ---------------------------------------------------------------
+    if hasattr(cripser, "compute_ph"):
+        return cripser.compute_ph(inverted_image, maxdim=1)
 
-    inverted_img = (
-        preprocessed_img.max()
-        -
-        preprocessed_img
-    )
-
-
-    # ---------------------------------------------------------------
-    # COMPUTE UPPER-STAR PERSISTENT HOMOLOGY
-    # ---------------------------------------------------------------
-
-    if hasattr(
-        cripser,
-        "compute_ph"
-    ):
-
-        ph_upper = cripser.compute_ph(
-            inverted_img.astype(float),
-            maxdim=1
-        )
-
-    else:
-
-        ph_upper = cripser.computePH(
-            inverted_img.astype(float),
-            maxdim=1
-        )
-
-
-    return ph_upper
+    return cripser.computePH(inverted_image, maxdim=1)
 
 
 # =====================================================================
@@ -133,1432 +79,548 @@ def build_persistence_binning_vector(
     persistence_diagrams,
     n_bins=3,
     birth_range=(0.0, 255.0),
-    persistence_range=(0.0, 255.0)
+    persistence_range=(0.0, 255.0),
 ):
     """
-    Convert H0 and H1 persistence diagrams into one fixed-length
-    persistence-binning feature vector.
+    Convert H0 and H1 diagrams into one persistence-binning vector.
 
-    Each persistence point is transformed from:
+    Each point is converted from (birth, death) to
+    (birth, persistence), where persistence = death - birth.
 
-        (birth, death)
-
-    to:
-
-        (birth, persistence)
-
-    where:
-
-        persistence = death - birth
-
-    A two-dimensional histogram is constructed over the
-    birth-persistence plane.
-
-    Each persistence point contributes its persistence value as the
-    weight of the bin containing that point.
-
-    H0 and H1 are binned separately and then concatenated.
-
-    Parameters
-    ----------
-    persistence_diagrams : list
-        List containing:
-
-            persistence_diagrams[0] = H0 diagram
-            persistence_diagrams[1] = H1 diagram
-
-        Each diagram contains:
-
-            [birth, death]
-
-    n_bins : int, optional
-        Number of bins along each axis.
-        Default is 3.
-
-    birth_range : tuple, optional
-        Minimum and maximum birth values used for binning.
-
-    persistence_range : tuple, optional
-        Minimum and maximum persistence values used for binning.
-
-    Returns
-    -------
-    numpy.ndarray
-        Fixed-length persistence-binning feature vector.
-
-        With n_bins=3:
-
-            H0 = 3 x 3 = 9 features
-            H1 = 3 x 3 = 9 features
-
-            Total = 18 features
+    With n_bins=3:
+        H0: 3 x 3 = 9 features
+        H1: 3 x 3 = 9 features
+        Total: 18 features
     """
-
-    # ---------------------------------------------------------------
-    # CREATE BIN EDGES
-    # ---------------------------------------------------------------
-
-    birth_bins = np.linspace(
-        birth_range[0],
-        birth_range[1],
-        n_bins + 1
-    )
-
-
+    birth_bins = np.linspace(birth_range[0], birth_range[1], n_bins + 1)
     persistence_bins = np.linspace(
         persistence_range[0],
         persistence_range[1],
-        n_bins + 1
+        n_bins + 1,
     )
-
 
     feature_blocks = []
 
-
-    # ---------------------------------------------------------------
-    # PROCESS H0 AND H1 SEPARATELY
-    # ---------------------------------------------------------------
-
     for diagram in persistence_diagrams:
+        diagram = np.asarray(diagram, dtype=np.float64)
 
-        pd = np.asarray(
-            diagram,
-            dtype=np.float64
-        )
-
-
-        # -----------------------------------------------------------
-        # HANDLE EMPTY PERSISTENCE DIAGRAM
-        # -----------------------------------------------------------
-
-        if pd.size == 0:
-
-            bin_matrix = np.zeros(
-                (
-                    n_bins,
-                    n_bins
-                ),
-                dtype=np.float64
-            )
-
-
-            feature_blocks.append(
-                bin_matrix.flatten()
-            )
-
-
+        if diagram.size == 0:
+            feature_blocks.append(np.zeros(n_bins * n_bins, dtype=np.float64))
             continue
-
-
-        # -----------------------------------------------------------
-        # REMOVE INFINITE FEATURES
-        # -----------------------------------------------------------
 
         finite_mask = (
-            np.isfinite(
-                pd[:, 0]
-            )
-            &
-            np.isfinite(
-                pd[:, 1]
-            )
+            np.isfinite(diagram[:, 0])
+            & np.isfinite(diagram[:, 1])
         )
+        finite_diagram = diagram[finite_mask]
 
-
-        pd_finite = pd[
-            finite_mask
-        ]
-
-
-        # -----------------------------------------------------------
-        # HANDLE DIAGRAM WITH NO FINITE FEATURES
-        # -----------------------------------------------------------
-
-        if len(
-            pd_finite
-        ) == 0:
-
-            bin_matrix = np.zeros(
-                (
-                    n_bins,
-                    n_bins
-                ),
-                dtype=np.float64
-            )
-
-
-            feature_blocks.append(
-                bin_matrix.flatten()
-            )
-
-
+        if len(finite_diagram) == 0:
+            feature_blocks.append(np.zeros(n_bins * n_bins, dtype=np.float64))
             continue
 
+        births = finite_diagram[:, 0]
+        persistences = finite_diagram[:, 1] - finite_diagram[:, 0]
 
-        # -----------------------------------------------------------
-        # CONVERT BIRTH-DEATH TO BIRTH-PERSISTENCE
-        # -----------------------------------------------------------
-
-        births = pd_finite[
-            :,
-            0
-        ]
-
-
-        deaths = pd_finite[
-            :,
-            1
-        ]
-
-
-        persistences = (
-            deaths
-            -
-            births
-        )
-
-
-        # -----------------------------------------------------------
-        # REMOVE INVALID NEGATIVE PERSISTENCE VALUES
-        # -----------------------------------------------------------
-
-        valid_mask = (
-            persistences >= 0
-        )
-
-
-        births = births[
-            valid_mask
-        ]
-
-
-        persistences = persistences[
-            valid_mask
-        ]
-
-
-        # -----------------------------------------------------------
-        # BUILD WEIGHTED 2D PERSISTENCE-BINNING GRID
-        # -----------------------------------------------------------
+        valid_mask = persistences >= 0
+        births = births[valid_mask]
+        persistences = persistences[valid_mask]
 
         bin_matrix, _, _ = np.histogram2d(
             births,
             persistences,
-            bins=[
-                birth_bins,
-                persistence_bins
-            ],
-            weights=persistences
+            bins=[birth_bins, persistence_bins],
+            weights=persistences,
         )
 
+        feature_blocks.append(bin_matrix.flatten())
 
-        # -----------------------------------------------------------
-        # FLATTEN THE 2D GRID
-        # -----------------------------------------------------------
-
-        feature_blocks.append(
-            bin_matrix.flatten()
-        )
-
-
-    # ---------------------------------------------------------------
-    # CONCATENATE H0 AND H1
-    # ---------------------------------------------------------------
-
-    feature_vector = np.concatenate(
-        feature_blocks
-    )
-
-
-    return feature_vector
+    return np.concatenate(feature_blocks)
 
 
 # =====================================================================
-# 4. BUILD UPPER-STAR PERSISTENCE-BINNING DATASET
+# 4. IMAGE INFORMATION HELPERS
+# =====================================================================
+
+def get_image_id(image_path):
+    """
+    Remove the file extension and trailing '_processed' suffix.
+
+    Example:
+        control_stub1_0001_processed.tif
+        becomes
+        control_stub1_0001
+    """
+    image_id = Path(image_path).stem
+
+    if image_id.lower().endswith("_processed"):
+        image_id = image_id[:-len("_processed")]
+
+    return image_id
+
+
+def get_label_from_filename(image_path):
+    """
+    Determine the class label from the image filename.
+
+    Returns:
+        (1, "Microgravity") for microgravity images
+        (0, "Control") for control images
+    """
+    filename = Path(image_path).name.lower()
+
+    if "microgravity" in filename:
+        return 1, "Microgravity"
+
+    if "control" in filename:
+        return 0, "Control"
+
+    raise ValueError(
+        f"Could not determine class label from filename: "
+        f"{Path(image_path).name}"
+    )
+
+
+# =====================================================================
+# 5. BUILD AND SAVE THE VECTORIZED DATASET
 # =====================================================================
 
 def build_upper_star_dataset(
     image_paths,
     ph_output_dir,
+    image_vector_output_dir,
+    filtration_name,
+    vectorization_method,
+    preprocessing_version,
     n_bins=3,
     birth_range=(0.0, 255.0),
-    persistence_range=(0.0, 255.0)
+    persistence_range=(0.0, 255.0),
 ):
     """
-    Build a machine-learning dataset from preprocessed images.
+    Build the Upper Star persistence-binning dataset.
 
     For each image:
-
-        1. Load the preprocessed image
-        2. Scale intensities to 0-255
-        3. Compute or load upper-star persistent homology
-        4. Save persistent homology if newly computed
-        5. Separate H0 and H1
-        6. Apply persistence binning
-        7. Store the resulting feature vector
-        8. Assign the experimental class label
-
-    Parameters
-    ----------
-    image_paths : list
-        Paths to preprocessed microscopy images.
-
-    ph_output_dir : pathlib.Path
-        Folder used to save and load persistent homology results.
-
-    n_bins : int, optional
-        Number of persistence bins along each axis.
-
-    birth_range : tuple, optional
-        Birth-value range.
-
-    persistence_range : tuple, optional
-        Persistence-value range.
-
-    Returns
-    -------
-    tuple
-        X : numpy.ndarray
-            Feature matrix.
-
-        y : numpy.ndarray
-            Class labels.
-
-            0 = Control
-            1 = Microgravity
-
-        image_names : numpy.ndarray
-            Image filenames.
+        1. Load the V2 preprocessed image
+        2. Load or compute persistent homology
+        3. Separate H0 and H1
+        4. Apply persistence binning
+        5. Determine the class label
+        6. Save the individual vector
+        7. Add the vector to the combined dataset
+        8. Add one row to the vector manifest
     """
+    ph_output_dir = Path(ph_output_dir)
+    image_vector_output_dir = Path(image_vector_output_dir)
 
-    # ---------------------------------------------------------------
-    # MAKE SURE PH OUTPUT DIRECTORY EXISTS
-    # ---------------------------------------------------------------
+    image_vector_output_dir.mkdir(parents=True, exist_ok=True)
 
-    ph_output_dir = Path(
-        ph_output_dir
-    )
-
-
-    ph_output_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-
-    # ---------------------------------------------------------------
-    # CREATE DATASET STORAGE LISTS
-    # ---------------------------------------------------------------
-
-    X = []
-
-    y = []
-
+    feature_rows = []
+    labels = []
     image_names = []
+    manifest_records = []
 
+    for image_number, image_path in enumerate(image_paths, start=1):
+        image_path = Path(image_path)
 
-    # ---------------------------------------------------------------
-    # PROCESS EACH IMAGE
-    # ---------------------------------------------------------------
+        print("\n============================================")
+        print(f"IMAGE {image_number} OF {len(image_paths)}")
+        print(f"Processing: {image_path.name}")
 
-    for image_number, path in enumerate(
-        image_paths,
-        start=1
-    ):
+        # Load and scale image to 0-255.
+        image = img_as_float(io.imread(image_path, as_gray=True))
 
-        path = Path(
-            path
-        )
+        if image.max() <= 1.0:
+            image = image * 255.0
 
+        image = np.asarray(image, dtype=np.float64)
 
-        print(
-            "\n============================================"
-        )
-
-
-        print(
-            f"IMAGE {image_number} OF {len(image_paths)}"
-        )
-
-
-        print(
-            f"Processing: {path.name}"
-        )
-
-
-        # -----------------------------------------------------------
-        # LOAD PREPROCESSED IMAGE
-        # -----------------------------------------------------------
-
-        img = img_as_float(
-            io.imread(
-                path,
-                as_gray=True
-            )
-        )
-
-
-        # -----------------------------------------------------------
-        # SCALE IMAGE TO 0-255
-        # -----------------------------------------------------------
-
-        if img.max() <= 1.0:
-
-            img = (
-                img
-                *
-                255.0
-            )
-
-
-        img = np.asarray(
-            img,
-            dtype=np.float64
-        )
-
-
-        # -----------------------------------------------------------
-        # DEFINE PERSISTENT HOMOLOGY SAVE PATH
-        # -----------------------------------------------------------
-
+        # Load or compute persistent homology.
         ph_save_path = (
             ph_output_dir
-            /
-            f"{path.stem}_upper_star_ph.npy"
+            / f"{image_path.stem}_upper_star_ph.npy"
         )
-
-
-        # -----------------------------------------------------------
-        # LOAD SAVED PH IF IT ALREADY EXISTS
-        # -----------------------------------------------------------
 
         if ph_save_path.exists():
-
-            print(
-                "Loading previously saved upper-star "
-                "persistent homology..."
-            )
-
-
-            ph_upper = np.load(
-                ph_save_path
-            )
-
-
-            print(
-                "Loaded from:"
-            )
-
-
-            print(
-                ph_save_path
-            )
-
-
-        # -----------------------------------------------------------
-        # OTHERWISE COMPUTE AND SAVE PH
-        # -----------------------------------------------------------
-
+            print("Loading previously saved V2 upper-star PH...")
+            ph_upper = np.load(ph_save_path, allow_pickle=False)
         else:
+            print("Saved PH was not found.")
+            print("Computing upper-star persistent homology...")
+            ph_upper = compute_upper_star(image)
+            np.save(ph_save_path, ph_upper)
+            print(f"Persistent homology saved to:\n{ph_save_path}")
 
-            print(
-                "Computing upper-star persistent homology..."
-            )
+        # Separate H0 and H1.
+        persistence_0 = ph_upper[ph_upper[:, 0] == 0][:, 1:3]
+        persistence_1 = ph_upper[ph_upper[:, 0] == 1][:, 1:3]
 
+        print(f"H0 intervals: {len(persistence_0)}")
+        print(f"H1 intervals: {len(persistence_1)}")
 
-            ph_upper = compute_upper_star(
-                img
-            )
-
-
-            np.save(
-                ph_save_path,
-                ph_upper
-            )
-
-
-            print(
-                "Persistent homology saved to:"
-            )
-
-
-            print(
-                ph_save_path
-            )
-
-
-        print(
-            "Raw persistence diagram shape:",
-            ph_upper.shape
-        )
-
-
-        # -----------------------------------------------------------
-        # SEPARATE H0 AND H1
-        # -----------------------------------------------------------
-
-        persistence_0 = ph_upper[
-            ph_upper[:, 0] == 0
-        ][
-            :,
-            1:3
-        ]
-
-
-        persistence_1 = ph_upper[
-            ph_upper[:, 0] == 1
-        ][
-            :,
-            1:3
-        ]
-
-
-        print(
-            "H0 intervals:",
-            len(
-                persistence_0
-            )
-        )
-
-
-        print(
-            "H1 intervals:",
-            len(
-                persistence_1
-            )
-        )
-
-
-        # -----------------------------------------------------------
-        # APPLY PERSISTENCE BINNING
-        # -----------------------------------------------------------
-
-        print(
-            "Applying persistence binning..."
-        )
-
-
+        # Create the persistence-binning vector.
         feature_vector = build_persistence_binning_vector(
-            persistence_diagrams=[
-                persistence_0,
-                persistence_1
-            ],
+            persistence_diagrams=[persistence_0, persistence_1],
             n_bins=n_bins,
             birth_range=birth_range,
-            persistence_range=persistence_range
+            persistence_range=persistence_range,
         )
 
+        print(f"Feature vector shape: {feature_vector.shape}")
 
-        print(
-            "Feature vector shape:",
-            feature_vector.shape
+        label, class_name = get_label_from_filename(image_path)
+        image_id = get_image_id(image_path)
+
+        # Save the vector using the requested naming format.
+        vector_filename = (
+            f"{image_id}-"
+            f"{filtration_name}-"
+            f"{vectorization_method}.npy"
         )
+        vector_save_path = image_vector_output_dir / vector_filename
 
+        np.save(vector_save_path, feature_vector)
+        print(f"Individual image vector saved to:\n{vector_save_path}")
 
-        X.append(
-            feature_vector
-        )
+        feature_rows.append(feature_vector)
+        labels.append(label)
+        image_names.append(image_path.name)
 
-
-        # -----------------------------------------------------------
-        # ASSIGN CLASS LABEL
-        # -----------------------------------------------------------
-
-        filename_lower = (
-            path.name.lower()
-        )
-
-
-        if "microgravity" in filename_lower:
-
-            label = 1
-
-
-        elif "control" in filename_lower:
-
-            label = 0
-
-
-        else:
-
-            raise ValueError(
-                "Could not determine class label "
-                f"from filename: {path.name}"
-            )
-
-
-        y.append(
-            label
-        )
-
-
-        image_names.append(
-            path.name
-        )
-
-
-    # ---------------------------------------------------------------
-    # CONVERT TO NUMPY ARRAYS
-    # ---------------------------------------------------------------
-
-    X = np.asarray(
-        X,
-        dtype=np.float64
-    )
-
-
-    y = np.asarray(
-        y,
-        dtype=int
-    )
-
-
-    image_names = np.asarray(
-        image_names
-    )
-
-
-    return (
-        X,
-        y,
-        image_names
-    )
-
-
-# =====================================================================
-# 5. MACHINE LEARNING
-# =====================================================================
-
-def run_ml_benchmark(
-    X,
-    y,
-    output_dir
-):
-    """
-    Train and evaluate:
-
-        1. Linear Support Vector Machine
-        2. Multilayer Perceptron Neural Network
-
-    Both models use standardized persistence-binning feature vectors.
-
-    Accuracy, F1 score, and confusion matrices are calculated
-    and saved.
-    """
-
-    # ---------------------------------------------------------------
-    # MAKE SURE CLASSIFICATION OUTPUT DIRECTORY EXISTS
-    # ---------------------------------------------------------------
-
-    output_dir = Path(
-        output_dir
-    )
-
-
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-
-    # ---------------------------------------------------------------
-    # DEFINE MODELS
-    # ---------------------------------------------------------------
-
-    models = [
-
-        (
-            "Linear SVM",
-
-            SVC(
-                kernel="linear",
-                C=1.0,
-                random_state=42
-            )
-        ),
-
-
-        (
-            "Neural Network (MLP)",
-
-            MLPClassifier(
-                hidden_layer_sizes=(
-                    32,
-                    16
-                ),
-                max_iter=1000,
-                random_state=42
-            )
-        )
-    ]
-
-
-    # ---------------------------------------------------------------
-    # TRAIN / TEST SPLIT
-    # ---------------------------------------------------------------
-
-    (
-        X_train,
-        X_test,
-        y_train,
-        y_test
-    ) = train_test_split(
-        X,
-        y,
-        test_size=0.2,
-        random_state=42,
-        stratify=y
-    )
-
-
-    print(
-        "\n============================================"
-    )
-
-
-    print(
-        "MACHINE LEARNING DATASET"
-    )
-
-
-    print(
-        "============================================"
-    )
-
-
-    print(
-        "Training samples:",
-        X_train.shape[0]
-    )
-
-
-    print(
-        "Testing samples:",
-        X_test.shape[0]
-    )
-
-
-    print(
-        "Features per image:",
-        X_train.shape[1]
-    )
-
-
-    metrics_records = []
-
-    confusion_records = []
-
-
-    # ---------------------------------------------------------------
-    # TRAIN EACH MODEL
-    # ---------------------------------------------------------------
-
-    for (
-        model_name,
-        classifier
-    ) in models:
-
-
-        print(
-            "\n============================================"
-        )
-
-
-        print(
-            f"TRAINING: {model_name}"
-        )
-
-
-        print(
-            "============================================"
-        )
-
-
-        # -----------------------------------------------------------
-        # CREATE MODEL PIPELINE
-        # -----------------------------------------------------------
-
-        model_pipeline = make_pipeline(
-            StandardScaler(),
-            classifier
-        )
-
-
-        # -----------------------------------------------------------
-        # TRAIN MODEL
-        # -----------------------------------------------------------
-
-        model_pipeline.fit(
-            X_train,
-            y_train
-        )
-
-
-        # -----------------------------------------------------------
-        # MAKE PREDICTIONS
-        # -----------------------------------------------------------
-
-        y_pred = model_pipeline.predict(
-            X_test
-        )
-
-
-        # -----------------------------------------------------------
-        # CALCULATE ACCURACY
-        # -----------------------------------------------------------
-
-        accuracy = accuracy_score(
-            y_test,
-            y_pred
-        )
-
-
-        # -----------------------------------------------------------
-        # CALCULATE F1 SCORE
-        # -----------------------------------------------------------
-
-        f1 = f1_score(
-            y_test,
-            y_pred,
-            average="binary",
-            zero_division=0
-        )
-
-
-        # -----------------------------------------------------------
-        # CALCULATE CONFUSION MATRIX
-        # -----------------------------------------------------------
-
-        cm = confusion_matrix(
-            y_test,
-            y_pred,
-            labels=[
-                0,
-                1
-            ]
-        )
-
-
-        # -----------------------------------------------------------
-        # PRINT RESULTS
-        # -----------------------------------------------------------
-
-        print(
-            f"Accuracy: {accuracy:.4f}"
-        )
-
-
-        print(
-            f"F1 Score: {f1:.4f}"
-        )
-
-
-        print(
-            "Confusion Matrix:"
-        )
-
-
-        print(
-            cm
-        )
-
-
-        # -----------------------------------------------------------
-        # STORE RESULTS
-        # -----------------------------------------------------------
-
-        metrics_records.append(
+        manifest_records.append(
             {
-                "Model": model_name,
-
-                "Accuracy": round(
-                    accuracy,
-                    4
-                ),
-
-                "F1-Score": round(
-                    f1,
-                    4
-                ),
-
-                "TN": cm[
-                    0,
-                    0
-                ],
-
-                "FP": cm[
-                    0,
-                    1
-                ],
-
-                "FN": cm[
-                    1,
-                    0
-                ],
-
-                "TP": cm[
-                    1,
-                    1
-                ]
+                "Image_ID": image_id,
+                "Original_Image_Name": image_path.name,
+                "Filtration": filtration_name,
+                "Vectorization_Method": vectorization_method,
+                "Preprocessing_Version": preprocessing_version,
+                "Label": label,
+                "Class_Name": class_name,
+                "Feature_Count": len(feature_vector),
+                "Vector_Filename": vector_filename,
             }
         )
 
+    X = np.asarray(feature_rows, dtype=np.float64)
+    y = np.asarray(labels, dtype=int)
+    image_names = np.asarray(image_names, dtype=str)
+    manifest_df = pd.DataFrame(manifest_records)
 
-        confusion_records.append(
-            (
-                model_name,
-                cm
-            )
-        )
-
-
-    # ---------------------------------------------------------------
-    # DISPLAY CONFUSION MATRICES
-    # ---------------------------------------------------------------
-
-    fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(
-            10,
-            4
-        )
-    )
-
-
-    for ax, (
-        model_name,
-        cm
-    ) in zip(
-        axes,
-        confusion_records
-    ):
-
-
-        display = ConfusionMatrixDisplay(
-            confusion_matrix=cm,
-            display_labels=[
-                "Control",
-                "Microgravity"
-            ]
-        )
-
-
-        display.plot(
-            ax=ax,
-            cmap="Blues",
-            colorbar=False
-        )
-
-
-        ax.set_title(
-            model_name
-        )
-
-
-    plt.tight_layout()
-
-
-    # ---------------------------------------------------------------
-    # SAVE CONFUSION MATRIX FIGURE
-    # ---------------------------------------------------------------
-
-    confusion_matrix_path = (
-        output_dir
-        /
-        "upper_star_confusion_matrices.png"
-    )
-
-
-    plt.savefig(
-        confusion_matrix_path,
-        dpi=300,
-        bbox_inches="tight"
-    )
-
-
-    print(
-        "\nConfusion matrix figure saved to:"
-    )
-
-
-    print(
-        confusion_matrix_path
-    )
-
-
-    plt.show()
-
-
-    # ---------------------------------------------------------------
-    # CREATE RESULTS TABLE
-    # ---------------------------------------------------------------
-
-    df_metrics = pd.DataFrame(
-        metrics_records
-    )
-
-
-    print(
-        "\n============================================"
-    )
-
-
-    print(
-        "UPPER-STAR PERSISTENCE BINNING RESULTS"
-    )
-
-
-    print(
-        "============================================"
-    )
-
-
-    print(
-        df_metrics.to_string(
-            index=False
-        )
-    )
-
-
-    # ---------------------------------------------------------------
-    # SAVE RESULTS
-    # ---------------------------------------------------------------
-
-    csv_path = (
-        output_dir
-        /
-        "upper_star_persistence_binning_ml_metrics.csv"
-    )
-
-
-    df_metrics.to_csv(
-        csv_path,
-        index=False
-    )
-
-
-    print(
-        "\nMetrics saved to:"
-    )
-
-
-    print(
-        csv_path
-    )
+    return X, y, image_names, manifest_df
 
 
 # =====================================================================
-# 6. RUNNER CONTROLLER
+# 6. RUN 100 MACHINE-LEARNING EXPERIMENTS
+# =====================================================================
+
+def run_repeated_ml_benchmark(
+    X,
+    y,
+    output_dir,
+    filtration_name,
+    vectorization_method,
+    preprocessing_version,
+    n_runs=100,
+    test_size=0.20,
+    mlp_random_state=42,
+):
+    """
+    Run repeated stratified train/test experiments.
+
+    Each run uses a different split seed. The SVM and Neural Network
+    use the same train/test split within a run. The Neural Network
+    initialization remains constant.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if n_runs < 2:
+        raise ValueError(
+            "n_runs must be at least 2 to calculate a standard deviation."
+        )
+
+    if X.shape[0] != len(y):
+        raise ValueError(
+            "The feature matrix and label vector contain different "
+            "numbers of images."
+        )
+
+    if not np.isfinite(X).all():
+        raise ValueError(
+            "The feature matrix contains NaN or infinite values."
+        )
+
+    unique_classes, class_counts = np.unique(y, return_counts=True)
+
+    if len(unique_classes) < 2:
+        raise ValueError(
+            "Machine learning requires at least two classes."
+        )
+
+    if np.any(class_counts < 2):
+        raise ValueError(
+            "Each class must contain at least two images for a "
+            "stratified train/test split."
+        )
+
+    print("\n============================================")
+    print("REPEATED MACHINE-LEARNING VALIDATION")
+    print("============================================")
+    print(f"Total images: {X.shape[0]}")
+    print(f"Features per image: {X.shape[1]}")
+    print(f"Number of runs: {n_runs}")
+    print(f"Testing proportion: {test_size}")
+
+    all_run_records = []
+
+    for run_number in range(1, n_runs + 1):
+        split_seed = run_number - 1
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            random_state=split_seed,
+            stratify=y,
+        )
+
+        models = [
+            (
+                "Linear SVM",
+                SVC(
+                    kernel="linear",
+                    C=1.0,
+                ),
+            ),
+            (
+                "Neural Network (MLP)",
+                MLPClassifier(
+                    hidden_layer_sizes=(32, 16),
+                    max_iter=1000,
+                    random_state=mlp_random_state,
+                ),
+            ),
+        ]
+
+        for model_name, classifier in models:
+            model_pipeline = make_pipeline(
+                StandardScaler(),
+                classifier,
+            )
+
+            model_pipeline.fit(X_train, y_train)
+            y_pred = model_pipeline.predict(X_test)
+
+            accuracy = accuracy_score(y_test, y_pred)
+            f1 = f1_score(
+                y_test,
+                y_pred,
+                average="binary",
+                zero_division=0,
+            )
+
+            all_run_records.append(
+                {
+                    "Run": run_number,
+                    "Seed": split_seed,
+                    "Filtration": filtration_name,
+                    "Vectorization_Method": vectorization_method,
+                    "Preprocessing_Version": preprocessing_version,
+                    "Model": model_name,
+                    "Training_Samples": len(y_train),
+                    "Testing_Samples": len(y_test),
+                    "Accuracy": accuracy,
+                    "F1_Score": f1,
+                }
+            )
+
+        if run_number == 1 or run_number % 10 == 0:
+            print(f"Completed run {run_number} of {n_runs}")
+
+    # Table 2: all model results from all runs.
+    all_runs_df = pd.DataFrame(all_run_records)
+    all_runs_path = output_dir / f"all_{n_runs}_runs.csv"
+
+    all_runs_df.to_csv(
+        all_runs_path,
+        index=False,
+        float_format="%.6f",
+    )
+
+    # Table 3: mean and sample standard deviation for each model.
+    summary_df = (
+        all_runs_df.groupby(
+            [
+                "Filtration",
+                "Vectorization_Method",
+                "Preprocessing_Version",
+                "Model",
+            ],
+            as_index=False,
+        )
+        .agg(
+            Runs=("Run", "count"),
+            Mean_Accuracy=("Accuracy", "mean"),
+            Accuracy_SD=("Accuracy", "std"),
+            Mean_F1=("F1_Score", "mean"),
+            F1_SD=("F1_Score", "std"),
+        )
+    )
+
+    summary_path = output_dir / "summary_statistics.csv"
+
+    summary_df.to_csv(
+        summary_path,
+        index=False,
+        float_format="%.6f",
+    )
+
+    print("\n============================================")
+    print("100-RUN VALIDATION COMPLETE")
+    print("============================================")
+    print(f"\nAll individual run results saved to:\n{all_runs_path}")
+    print(f"\nSummary statistics saved to:\n{summary_path}")
+    print("\nSUMMARY STATISTICS")
+    print(summary_df.to_string(index=False))
+
+    return all_runs_df, summary_df
+
+
+# =====================================================================
+# 7. RUNNER CONTROLLER
 # =====================================================================
 
 if __name__ == "__main__":
-
-    # ---------------------------------------------------------------
-    # INPUT FOLDER: PREPROCESSED IMAGES
-    # ---------------------------------------------------------------
-
-    PROCESSED_DIR = Path(
-        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\preprocessed_images"
+    ALL_IMAGES_DIR = Path(
+        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images"
     )
 
+    # Confirm that this folder name exactly matches the actual V2 folder.
+    PROCESSED_DIR = ALL_IMAGES_DIR / "preprocessed_imagesv2"
 
-    # ---------------------------------------------------------------
-    # BASE RESULTS FOLDER
-    # ---------------------------------------------------------------
-
-    BASE_RESULTS_DIR = Path(
-        r"C:\Users\gabriel.garcia\OneDrive - Simpson College\Chloe Jamieson's files - IMAGES2.0\All Images\Results"
-    )
-
-
-    # ---------------------------------------------------------------
-    # FILTRATION NAME
-    # ---------------------------------------------------------------
-
-    FILTRATION_NAME = "Upper_Star"
-
-
-    # ---------------------------------------------------------------
-    # FILTRATION-SPECIFIC RESULTS FOLDER
-    # ---------------------------------------------------------------
-
-    RESULTS_DIR = (
-        BASE_RESULTS_DIR
-        /
-        FILTRATION_NAME
-    )
-
-
-    # ---------------------------------------------------------------
-    # PERSISTENT HOMOLOGY OUTPUT FOLDER
-    # ---------------------------------------------------------------
-
+    # Existing V2 persistent-homology results.
     PH_OUTPUT_DIR = (
-        RESULTS_DIR
-        /
-        "Persistent_Homology"
+        ALL_IMAGES_DIR
+        / "GabesResults"
+        / EXPERIMENT_FOLDER_NAME
+        / "Persistent_Homology"
     )
 
-
-    # ---------------------------------------------------------------
-    # VECTORIZATION OUTPUT FOLDER
-    # ---------------------------------------------------------------
-
-    VECTORIZATION_OUTPUT_DIR = (
-        RESULTS_DIR
-        /
-        "Vectorization"
+    # New validation outputs.
+    VALIDATION_RESULTS_DIR = (
+        ALL_IMAGES_DIR
+        / "GabesValidationResults"
+        / EXPERIMENT_FOLDER_NAME
+        / VECTORIZATION_METHOD
     )
 
+    IMAGE_VECTOR_OUTPUT_DIR = VALIDATION_RESULTS_DIR / "Image_Vectors"
+    DATASET_OUTPUT_DIR = VALIDATION_RESULTS_DIR / "Dataset"
+    TABLE_OUTPUT_DIR = VALIDATION_RESULTS_DIR / "Tables"
 
-    # ---------------------------------------------------------------
-    # CLASSIFICATION OUTPUT FOLDER
-    # ---------------------------------------------------------------
-
-    CLASSIFICATION_OUTPUT_DIR = (
-        RESULTS_DIR
-        /
-        "Classification"
-    )
-
-
-    # ---------------------------------------------------------------
-    # CREATE OUTPUT FOLDERS
-    # ---------------------------------------------------------------
-
-    PH_OUTPUT_DIR.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-
-    VECTORIZATION_OUTPUT_DIR.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-
-    CLASSIFICATION_OUTPUT_DIR.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-
-    # ---------------------------------------------------------------
-    # REPORT OUTPUT FOLDERS
-    # ---------------------------------------------------------------
-
-    print(
-        "\n============================================"
-    )
-
-
-    print(
-        "OUTPUT FOLDERS"
-    )
-
-
-    print(
-        "============================================"
-    )
-
-
-    print(
-        "Persistent Homology:"
-    )
-
-
-    print(
-        PH_OUTPUT_DIR
-    )
-
-
-    print(
-        "\nVectorization:"
-    )
-
-
-    print(
-        VECTORIZATION_OUTPUT_DIR
-    )
-
-
-    print(
-        "\nClassification:"
-    )
-
-
-    print(
-        CLASSIFICATION_OUTPUT_DIR
-    )
-
-
-    # ---------------------------------------------------------------
-    # FIND PREPROCESSED IMAGES
-    # ---------------------------------------------------------------
-
-    image_paths = sorted(
-        PROCESSED_DIR.glob(
-            "*_processed.tif"
+    # The PH folder should already exist. Do not silently create an
+    # empty folder because of a path typo.
+    if not PH_OUTPUT_DIR.exists():
+        raise FileNotFoundError(
+            "The existing V2 persistent-homology folder was not found:\n"
+            f"{PH_OUTPUT_DIR}"
         )
-    )
 
+    IMAGE_VECTOR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    DATASET_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    TABLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ---------------------------------------------------------------
-    # CHECK THAT IMAGES WERE FOUND
-    # ---------------------------------------------------------------
+    print("\n============================================")
+    print("EXPERIMENT FOLDERS")
+    print("============================================")
+    print(f"V2 preprocessed images:\n{PROCESSED_DIR}")
+    print(f"\nExisting V2 persistent homology:\n{PH_OUTPUT_DIR}")
+    print(f"\nNew validation results:\n{VALIDATION_RESULTS_DIR}")
+
+    image_paths = sorted(PROCESSED_DIR.glob("*_processed.tif"))
 
     if not image_paths:
-
         raise FileNotFoundError(
-            f"Could not find any preprocessed images in:\n"
-            f"{PROCESSED_DIR}"
+            "Could not find any V2 preprocessed images in:\n"
+            f"{PROCESSED_DIR}\n\n"
+            "Check the spelling of the PROCESSED_DIR folder."
         )
 
+    print(f"\nFound {len(image_paths)} V2 preprocessed images.")
 
-    print(
-        f"\nFound {len(image_paths)} "
-        f"preprocessed images."
-    )
-
-
-    # ---------------------------------------------------------------
-    # BUILD UPPER-STAR PERSISTENCE-BINNING DATASET
-    # ---------------------------------------------------------------
-
-    print(
-        "\n============================================"
-    )
-
-
-    print(
-        "BUILDING UPPER-STAR "
-        "PERSISTENCE-BINNING DATASET"
-    )
-
-
-    print(
-        "============================================"
-    )
-
+    print("\n============================================")
+    print("BUILDING UPPER-STAR V2 PERSISTENCE-BINNING DATASET")
+    print("============================================")
 
     (
         X_topological_features,
         y_experimental_classes,
-        image_names
+        image_names,
+        manifest_df,
     ) = build_upper_star_dataset(
         image_paths=image_paths,
         ph_output_dir=PH_OUTPUT_DIR,
+        image_vector_output_dir=IMAGE_VECTOR_OUTPUT_DIR,
+        filtration_name=FILTRATION_NAME,
+        vectorization_method=VECTORIZATION_METHOD,
+        preprocessing_version=PREPROCESSING_VERSION,
         n_bins=N_BINS,
         birth_range=BIRTH_RANGE,
-        persistence_range=PERSISTENCE_RANGE
+        persistence_range=PERSISTENCE_RANGE,
     )
 
-
-    # ---------------------------------------------------------------
-    # REPORT DATASET INFORMATION
-    # ---------------------------------------------------------------
-
-    print(
-        "\n============================================"
-    )
-
-
-    print(
-        "DATASET COMPLETE"
-    )
-
-
-    print(
-        "============================================"
-    )
-
-
-    print(
-        "Feature matrix shape:",
-        X_topological_features.shape
-    )
-
-
-    print(
-        "Label vector shape:",
-        y_experimental_classes.shape
-    )
-
-
+    print("\n============================================")
+    print("DATASET COMPLETE")
+    print("============================================")
+    print(f"Feature matrix shape: {X_topological_features.shape}")
+    print(f"Label vector shape: {y_experimental_classes.shape}")
     print(
         "Control images:",
-        np.sum(
-            y_experimental_classes == 0
-        )
+        np.sum(y_experimental_classes == 0),
     )
-
-
     print(
         "Microgravity images:",
-        np.sum(
-            y_experimental_classes == 1
-        )
+        np.sum(y_experimental_classes == 1),
     )
 
+    expected_features = 2 * N_BINS * N_BINS
+    print(f"Expected features per image: {expected_features}")
 
-    # ---------------------------------------------------------------
-    # VERIFY EXPECTED FEATURE VECTOR LENGTH
-    # ---------------------------------------------------------------
-
-    expected_features = (
-        2
-        *
-        N_BINS
-        *
-        N_BINS
-    )
-
-
-    print(
-        "Expected features per image:",
-        expected_features
-    )
-
-
-    if (
-        X_topological_features.shape[1]
-        !=
-        expected_features
-    ):
-
+    if X_topological_features.shape[1] != expected_features:
         raise ValueError(
             "Unexpected persistence-binning vector length. "
             f"Expected {expected_features}, but received "
             f"{X_topological_features.shape[1]}."
         )
 
+    # Save the combined dataset.
+    combined_features_path = DATASET_OUTPUT_DIR / "combined_features.npy"
+    labels_path = DATASET_OUTPUT_DIR / "labels.npy"
+    image_names_path = DATASET_OUTPUT_DIR / "image_names.npy"
 
-    # ---------------------------------------------------------------
-    # DEFINE VECTORIZATION SAVE PATHS
-    # ---------------------------------------------------------------
+    np.save(combined_features_path, X_topological_features)
+    np.save(labels_path, y_experimental_classes)
+    np.save(image_names_path, image_names)
 
-    features_save_path = (
-        VECTORIZATION_OUTPUT_DIR
-        /
-        "upper_star_18d_"
-        "persistence_binning_features.npy"
-    )
+    print("\n============================================")
+    print("COMBINED DATASET SAVED")
+    print("============================================")
+    print(f"Features:\n{combined_features_path}")
+    print(f"\nLabels:\n{labels_path}")
+    print(f"\nImage names:\n{image_names_path}")
 
+    # Table 1: image-vector manifest.
+    manifest_path = TABLE_OUTPUT_DIR / "image_vector_manifest.csv"
+    manifest_df.to_csv(manifest_path, index=False)
 
-    labels_save_path = (
-        VECTORIZATION_OUTPUT_DIR
-        /
-        "upper_star_"
-        "persistence_binning_labels.npy"
-    )
+    print(f"\nImage-vector manifest saved to:\n{manifest_path}")
 
-
-    names_save_path = (
-        VECTORIZATION_OUTPUT_DIR
-        /
-        "upper_star_"
-        "persistence_binning_names.npy"
-    )
-
-
-    # ---------------------------------------------------------------
-    # SAVE FEATURE MATRIX
-    # ---------------------------------------------------------------
-
-    np.save(
-        features_save_path,
-        X_topological_features
-    )
-
-
-    # ---------------------------------------------------------------
-    # SAVE LABELS
-    # ---------------------------------------------------------------
-
-    np.save(
-        labels_save_path,
-        y_experimental_classes
-    )
-
-
-    # ---------------------------------------------------------------
-    # SAVE IMAGE NAMES
-    # ---------------------------------------------------------------
-
-    np.save(
-        names_save_path,
-        image_names
-    )
-
-
-    print(
-        "\n============================================"
-    )
-
-
-    print(
-        "VECTORIZATION RESULTS SAVED"
-    )
-
-
-    print(
-        "============================================"
-    )
-
-
-    print(
-        "Features:"
-    )
-
-
-    print(
-        features_save_path
-    )
-
-
-    print(
-        "\nLabels:"
-    )
-
-
-    print(
-        labels_save_path
-    )
-
-
-    print(
-        "\nImage names:"
-    )
-
-
-    print(
-        names_save_path
-    )
-
-
-    # ---------------------------------------------------------------
-    # RUN MACHINE LEARNING
-    # ---------------------------------------------------------------
-
-    print(
-        "\n============================================"
-    )
-
-
-    print(
-        "RUNNING LINEAR SVM AND NEURAL NETWORK"
-    )
-
-
-    print(
-        "============================================"
-    )
-
-
-    run_ml_benchmark(
+    # Tables 2 and 3: all 100 runs and summary statistics.
+    run_repeated_ml_benchmark(
         X=X_topological_features,
         y=y_experimental_classes,
-        output_dir=CLASSIFICATION_OUTPUT_DIR
+        output_dir=TABLE_OUTPUT_DIR,
+        filtration_name=FILTRATION_NAME,
+        vectorization_method=VECTORIZATION_METHOD,
+        preprocessing_version=PREPROCESSING_VERSION,
+        n_runs=N_RUNS,
+        test_size=TEST_SIZE,
+        mlp_random_state=MLP_RANDOM_STATE,
     )
