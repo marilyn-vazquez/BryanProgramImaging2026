@@ -69,3 +69,221 @@ if __name__ == '__main__':
     RESULTS_DIR = SOURCE_DIR / "analysis_results"
     
     run_batch_experiments(SOURCE_DIR, RESULTS_DIR, filtration_suffix="_Filt_vect.npy", n_iterations=100)
+
+if __name__ == "__main__":
+
+    random.seed(101)
+
+    PROCESSED_DIR = Path(
+        r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Documents\GitHub\BryanProgramImaging2026\Experiments\IMAGES2.0\All Images\preprocessed_imagesv2"
+    )
+
+    # Separate folders for outputs
+    DIAGRAM_DIR = PROCESSED_DIR.parent / "lower_star_diagrams"
+    BARCODE_DIR = PROCESSED_DIR.parent / "lower_star_barcodes"
+
+    DIAGRAM_DIR.mkdir(parents=True, exist_ok=True)
+    BARCODE_DIR.mkdir(parents=True, exist_ok=True)
+
+    processed_paths = sorted(PROCESSED_DIR.glob("*_processed.tif"))
+
+    if not processed_paths:
+        raise FileNotFoundError(
+            f"No processed images found in {PROCESSED_DIR}"
+        )
+
+    print(f"Found {len(processed_paths)} processed images.")
+
+    # ================================================================
+    # Phase 1: Compute persistence diagrams
+    # ================================================================
+
+    print("\n=== Phase 1: Computing Lower-Star Persistence Diagrams ===")
+
+    saved_diagrams = compute_lower_star_ph(
+        images_paths=processed_paths,
+        output_dir=DIAGRAM_DIR
+    )
+
+    # ================================================================
+    # Phase 2: Convert diagrams to barcode vectors
+    # ================================================================
+
+    print("\n=== Phase 2: Vectorizing Persistence Diagrams ===")
+
+    X_topological_features, y_experimental_classes = (
+        vectorize_persistence_diagrams(saved_diagrams)
+    )
+
+    # Save each barcode individually
+    for diagram_path, barcode in zip(saved_diagrams, X_topological_features):
+
+        barcode_name = (
+            diagram_path.name
+            .replace("_lower_star_diagram.npy",
+                     "_lower_star_barcode.npy")
+        )
+
+        np.save(BARCODE_DIR / barcode_name, barcode)
+
+    # Save master arrays
+    np.save(
+        BARCODE_DIR / "lower_star_barcode_matrix.npy",
+        X_topological_features
+    )
+
+    np.save(
+        BARCODE_DIR / "lower_star_labels.npy",
+        y_experimental_classes
+    )
+
+    print("✅ Barcode vectors saved.")
+
+    # ================================================================
+    # Phase 3: Machine Learning
+    # ================================================================
+
+    print("\n=== Phase 3: Machine Learning ===")
+
+    run_ml_benchmark(
+        X_tda=X_topological_features,
+        y=y_experimental_classes,
+        output_dir=BARCODE_DIR,
+        dataset_title="Lower-Star Barcode Machine Learning"
+    )
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from collections import defaultdict
+
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import accuracy_score, f1_score
+
+
+def run_batch_experiments(
+        input_dir,
+        output_dir,
+        filtration_suffix="_upper_star_barcode.npy",
+        n_iterations=100):
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(input_dir.glob(f"*{filtration_suffix}"))
+
+    if not files:
+        print(f"⚠️ No upper-star barcode files found in {input_dir}")
+        return
+
+    X = []
+    y = []
+
+    for f in files:
+        X.append(np.load(f))
+
+        # Label:
+        # 1 = microgravity
+        # 0 = control
+        y.append(1 if "microgravity" in f.name.lower() else 0)
+
+    X = np.asarray(X)
+    y = np.asarray(y)
+
+    print(f"Loaded {len(X)} upper-star barcode vectors.")
+    print(f"Feature shape: {X.shape}")
+
+    classifiers = {
+        "Upper_Star_SVM": SVC(
+            kernel="rbf",
+            gamma=2
+        ),
+
+        "Upper_Star_NN": MLPClassifier(
+            hidden_layer_sizes=(32, 16),
+            max_iter=1000,
+            random_state=42
+        )
+    }
+
+    results = defaultdict(list)
+
+    print(f"🚀 Running {n_iterations} upper-star iterations...")
+
+    for seed in range(n_iterations):
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=0.40,
+            random_state=seed,
+            stratify=y
+        )
+
+        for name, clf in classifiers.items():
+
+            pipe = make_pipeline(
+                StandardScaler(),
+                clf
+            )
+
+            pipe.fit(X_train, y_train)
+
+            pred = pipe.predict(X_test)
+
+            results[name].append({
+                "Accuracy": accuracy_score(y_test, pred),
+                "F1": f1_score(
+                    y_test,
+                    pred,
+                    zero_division=0
+                )
+            })
+
+
+    # Save results
+    for name, data in results.items():
+
+        df = pd.DataFrame(data)
+
+        df.to_csv(
+            output_dir /
+            f"{name}_100_iteration_results.csv",
+            index=False
+        )
+
+        summary = pd.DataFrame({
+            "Mean": df.mean(),
+            "Std": df.std()
+        })
+
+        summary.to_csv(
+            output_dir /
+            f"{name}_summary_statistics.csv"
+        )
+
+
+    print("\n✅ Upper-star analysis complete.")
+    print(f"Results saved to: {output_dir}")
+
+
+
+if __name__ == "__main__":
+
+    # Folder containing upper-star barcode vectors
+    BARCODE_DIR = Path(
+        r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Documents\GitHub\BryanProgramImaging2026\Experiments\IMAGES2.0\All Images\preprocessed_imagesv2\upper_star_barcodes"
+    )
+
+    # Results folder
+    RESULTS_DIR = BARCODE_DIR / "analysis_results"
+
+    run_batch_experiments(
+        BARCODE_DIR,
+        RESULTS_DIR,
+        filtration_suffix="_upper_star_barcode.npy",
+        n_iterations=100
+    )
