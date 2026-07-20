@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Jul 20 14:31:49 2026
-
-@author: ezra.decleene
-"""
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -66,7 +59,7 @@ print(f"Generating {num_images} squiggle images with NO overlaps to '{output_fol
 for img_num in range(1, num_images + 1):
     fig = plt.figure(figsize=(10, 8), facecolor='black')
     ax = fig.add_subplot(111, projection='3d', computed_zorder=False)
-
+    ax.set_facecolor('black')
     ax.plot_surface(
         oval_x, oval_y, oval_z, 
         color='#333333', 
@@ -137,7 +130,7 @@ for img_num in range(1, num_images + 1):
     ax.axis('off')
 
     filepath = os.path.join(output_folder, f"squiggle_no_overlap_{img_num:03d}.png")
-    plt.savefig(filepath, bbox_inches='tight', dpi=150)
+    plt.savefig(filepath, bbox_inches='tight', dpi=150, facecolor=fig.get_facecolor())
     plt.close(fig)
 
 print("Squiggle images generation complete!")
