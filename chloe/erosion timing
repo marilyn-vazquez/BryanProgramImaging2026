@@ -1,0 +1,630 @@
+import os
+import random
+from pathlib import Path
+from time import perf_counter
+
+import cripser
+import numba as nb
+import numpy as np
+import pandas as pd
+
+from skimage import io
+from skimage.util import img_as_float
+
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+)
+
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+# =====================================================================
+# 1. EXPERIMENT SETTINGS
+# =====================================================================
+
+FILTRATION_NAME = "Erosion"
+VECTORIZATION_METHOD = "Barcode_10D"
+PREPROCESSING_VERSION = "V2"
+EXPERIMENT_FOLDER_NAME = "Erosion_Preprocessed_V2"
+
+TEST_SIZE = 0.20
+SPLIT_SEED = 42
+MLP_RANDOM_STATE = 42
+SAVE_RECOMPUTED_PH = True
+
+random.seed(101)
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+
+def find(condition):
+    """Return indices satisfying a condition."""
+    return np.nonzero(condition)
+
+
+def biImg_by_threshold_leq(img, threshold):
+    """
+    Convert grayscale image to binary.
+    Pixels <= threshold become 0.
+    Pixels > threshold become 1.
+    """
+    output_img = np.copy(img)
+
+    idxs_0 = find(img <= threshold)
+    idxs_1 = find(img > threshold)
+
+    output_img[idxs_0] = 0
+    output_img[idxs_1] = 1
+
+    return output_img
+
+
+@nb.jit(nopython=True)
+def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
+    """
+    Binary erosion using a custom structuring element.
+    """
+    input_shape = input_np_array.shape
+    output = np.zeros(input_shape)
+
+    for i in range(input_shape[0]):
+        for j in range(input_shape[1]):
+
+            if input_np_array[i, j] == minimal_pixel_value:
+                output[i, j] = minimal_pixel_value
+                continue
+
+            neighborhood = []
+
+            for k in range(len(input_list_of_points)):
+
+                m = i - input_list_of_points[k][1]
+                n = j + input_list_of_points[k][0]
+
+                if (
+                    (m >= 0)
+                    and (m < input_shape[0])
+                    and (n >= 0)
+                    and (n < input_shape[1])
+                ):
+                    neighborhood.append(input_np_array[m, n])
+
+            output[i, j] = min(neighborhood)
+
+    return output
+
+
+@nb.jit()
+def get_rectangle_coordinates(input_np_array):
+    """
+    Generate coordinates describing a rectangular structuring element.
+    """
+    shape = np.shape(input_np_array)
+
+    coords = []
+
+    origin_i = int(shape[0] / 2)
+    origin_j = int(shape[1] / 2)
+
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            coords.append(np.array([origin_j - j, origin_i - i]))
+
+    return coords
+
+
+def get_square_SE_list(maximal_SE_lengths):
+    """
+    Create square structuring elements from 2×2 up to the
+    specified maximum side length.
+    """
+    kernel_list = []
+
+    for size in range(2, maximal_SE_lengths + 1):
+        kernel_list.append(
+            get_rectangle_coordinates(
+                np.zeros((size, size))
+            )
+        )
+
+    return kernel_list
+def persistence_of_img(img, maxdim=1):
+    """
+    Compute persistent homology of an image using Cripser.
+    Returns H0 and H1 persistence diagrams separately.
+    """
+
+    img = np.asarray(img, dtype=np.float64)
+
+    if hasattr(cripser, "compute_ph"):
+        ph = cripser.compute_ph(img, maxdim=maxdim)
+    else:
+        ph = cripser.computePH(img, maxdim=maxdim)
+
+    persistence_0 = ph[ph[:, 0] == 0][:, 1:3]
+    persistence_1 = ph[ph[:, 0] == 1][:, 1:3]
+
+    return [persistence_0, persistence_1]
+
+
+def compute_erosion_filtration(binary_img, kernel_list):
+    """
+    Build the erosion filtration only.
+    """
+
+    img_buffer = np.array(binary_img, dtype=np.float64)
+
+    for kernel in kernel_list:
+
+        eroded = erosion(
+            input_np_array=binary_img,
+            input_list_of_points=kernel
+        )
+
+        img_buffer += eroded
+
+    return img_buffer
+
+
+def vectorize_persistence_diagram(pds):
+    """
+    Convert persistence diagrams into a 10-dimensional
+    feature vector.
+    """
+
+    h0, h1 = pds
+
+    if len(h0) > 0 and len(h1) > 0:
+        combined = np.vstack([h0, h1])
+    elif len(h0) > 0:
+        combined = h0
+    elif len(h1) > 0:
+        combined = h1
+    else:
+        return np.zeros(10, dtype=np.float64)
+
+    finite = np.isfinite(combined[:, 1])
+    combined = combined[finite]
+
+    if len(combined) == 0:
+        return np.zeros(10, dtype=np.float64)
+
+    births = combined[:, 0]
+    deaths = combined[:, 1]
+    persistence = deaths - births
+
+    if len(persistence) == 0:
+        return np.zeros(10, dtype=np.float64)
+
+    feature_vector = np.array([
+        np.mean(births),
+        np.std(births),
+        np.median(births),
+        np.max(births),
+
+        np.mean(deaths),
+        np.std(deaths),
+        np.max(deaths),
+
+        np.mean(persistence),
+        np.std(persistence),
+        np.sum(persistence)
+    ], dtype=np.float64)
+
+    return np.nan_to_num(
+        feature_vector,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
+
+def get_image_id(image_path):
+    """
+    Remove the file extension and trailing '_processed'
+    from the filename.
+    """
+    image_id = Path(image_path).stem
+
+    if image_id.lower().endswith("_processed"):
+        image_id = image_id[:-10]
+
+    return image_id
+
+
+def get_label_from_filename(image_path):
+    """
+    Determine class label from filename.
+    """
+
+    filename = Path(image_path).name.lower()
+
+    if "microgravity" in filename:
+        return 1, "Microgravity"
+
+    if "control" in filename:
+        return 0, "Control"
+
+    raise ValueError(
+        f"Could not determine class label from {image_path}"
+    )
+
+
+def build_and_time_erosion_dataset(
+        image_paths,
+        ph_output_dir,
+        image_vector_output_dir,
+        filtration_name,
+        vectorization_method,
+        preprocessing_version,
+        save_recomputed_ph=True,
+):
+    """
+    Compute erosion persistence diagrams, feature vectors,
+    and timing information for every image.
+    """
+
+    os.makedirs(ph_output_dir, exist_ok=True)
+    os.makedirs(image_vector_output_dir, exist_ok=True)
+
+    dataset_records = []
+    timing_records = []
+
+    kernels = get_square_SE_list(maximal_SE_lengths=4)
+
+    for path in image_paths:
+
+        image_id = get_image_id(path)
+
+        label_num, label_str = get_label_from_filename(path)
+
+        # ----------------------------
+        # Load image
+        # ----------------------------
+        img = img_as_float(
+            io.imread(path, as_gray=True)
+        )
+
+        # ----------------------------
+        # Stage 1: Binary threshold
+        # ----------------------------
+        t0 = perf_counter()
+
+        binary_img = biImg_by_threshold_leq(
+            img,
+            threshold=0.5
+        )
+
+        t1 = perf_counter()
+
+        # ----------------------------
+        # Stage 2: Build filtration
+        # ----------------------------
+        filtration = compute_erosion_filtration(
+            binary_img,
+            kernels
+        )
+
+        t2 = perf_counter()
+
+        # ----------------------------
+        # Stage 3: Persistent homology
+        # ----------------------------
+        pds = persistence_of_img(filtration)
+
+        t3 = perf_counter()
+
+        # ----------------------------
+        # Stage 4: Vectorization
+        # ----------------------------
+        feature_vector = vectorize_persistence_diagram(
+            pds
+        )
+
+        t4 = perf_counter()
+        # ----------------------------
+        # Record timing
+        # ----------------------------
+        timing_records.append({
+
+            "Image_ID": image_id,
+
+            "Threshold_Time": t1 - t0,
+
+            "Filtration_Time": t2 - t1,
+
+            "PH_Time": t3 - t2,
+
+            "Vectorization_Time": t4 - t3,
+
+            "Total_Time": t4 - t0
+        })
+
+        # ----------------------------
+        # Save outputs
+        # ----------------------------
+        if save_recomputed_ph:
+
+            np.save(
+                os.path.join(
+                    ph_output_dir,
+                    f"{image_id}_ph.npy"
+                ),
+                np.array(
+                    pds,
+                    dtype=object
+                ),
+                allow_pickle=True
+            )
+
+        np.save(
+            os.path.join(
+                image_vector_output_dir,
+                f"{image_id}_vec.npy"
+            ),
+            feature_vector
+        )
+
+        # ----------------------------
+        # Build dataset record
+        # ----------------------------
+        record = {
+
+            "Image_ID": image_id,
+            "Label_Num": label_num,
+            "Label_Str": label_str,
+
+            "Filtration_Name":
+                filtration_name,
+
+            "Vectorization_Method":
+                vectorization_method,
+
+            "Preprocessing_Version":
+                preprocessing_version
+        }
+
+        for i in range(10):
+            record[f"Feature_{i+1}"] = feature_vector[i]
+
+        dataset_records.append(record)
+
+    return (
+        pd.DataFrame(dataset_records),
+        pd.DataFrame(timing_records)
+    )
+def evaluate_model(model, name, X_train, X_test, y_train, y_test):
+    """
+    Train and evaluate a machine learning model.
+    """
+
+    t0 = perf_counter()
+
+    pipeline = make_pipeline(
+        StandardScaler(),
+        model
+    )
+
+    pipeline.fit(X_train, y_train)
+
+    predictions = pipeline.predict(X_test)
+
+    t1 = perf_counter()
+
+    tn, fp, fn, tp = confusion_matrix(
+        y_test,
+        predictions
+    ).ravel()
+
+    return {
+
+        "Model": name,
+
+        "Training_Testing_Time_Sec": t1 - t0,
+
+        "Accuracy": accuracy_score(
+            y_test,
+            predictions
+        ),
+
+        "F1_Score": f1_score(
+            y_test,
+            predictions
+        ),
+
+        "TN": tn,
+        "FP": fp,
+        "FN": fn,
+        "TP": tp
+    }
+
+
+def run_experiment(image_paths, output_root):
+    """
+    Execute the complete erosion experiment.
+    """
+
+    ph_dir = os.path.join(
+        output_root,
+        "PH_Arrays"
+    )
+
+    vec_dir = os.path.join(
+        output_root,
+        "Vectors"
+    )
+
+    # ------------------------------------------------------------
+    # Build feature dataset
+    # ------------------------------------------------------------
+    df_data, df_times = build_and_time_erosion_dataset(
+
+        image_paths=image_paths,
+
+        ph_output_dir=ph_dir,
+
+        image_vector_output_dir=vec_dir,
+
+        filtration_name=FILTRATION_NAME,
+
+        vectorization_method=VECTORIZATION_METHOD,
+
+        preprocessing_version=PREPROCESSING_VERSION,
+
+        save_recomputed_ph=SAVE_RECOMPUTED_PH,
+    )
+
+    # ------------------------------------------------------------
+    # Save dataset and timing information
+    # ------------------------------------------------------------
+    df_data.to_csv(
+        os.path.join(output_root, "dataset.csv"),
+        index=False
+    )
+
+    df_times.to_csv(
+        os.path.join(output_root, "image_timing.csv"),
+        index=False
+    )
+
+    df_times.describe().to_csv(
+        os.path.join(output_root, "timing_summary.csv")
+    )
+
+    # ------------------------------------------------------------
+    # Prepare ML dataset
+    # ------------------------------------------------------------
+    feature_columns = [
+        f"Feature_{i+1}"
+        for i in range(10)
+    ]
+
+    X = df_data[feature_columns].values
+
+    y = df_data["Label_Num"].values
+
+    X_train, X_test, y_train, y_test = train_test_split(
+
+        X,
+
+        y,
+
+        test_size=TEST_SIZE,
+
+        random_state=SPLIT_SEED,
+
+        stratify=y
+    )
+
+    # ------------------------------------------------------------
+    # Models
+    # ------------------------------------------------------------
+    models = [
+
+        (
+            SVC(
+                kernel="linear"
+            ),
+            "Linear_SVM"
+        ),
+
+        (
+            SVC(
+                kernel="rbf"
+            ),
+            "RBF_SVM"
+        ),
+
+        (
+            MLPClassifier(
+                random_state=MLP_RANDOM_STATE,
+                max_iter=1000
+            ),
+            "Neural_Network"
+        )
+    ]
+
+    results = []
+
+    for model, name in models:
+
+        results.append(
+
+            evaluate_model(
+
+                model,
+
+                name,
+
+                X_train,
+
+                X_test,
+
+                y_train,
+
+                y_test
+
+            )
+        )
+
+    pd.DataFrame(results).to_csv(
+
+        os.path.join(
+
+            output_root,
+
+            "model_results.csv"
+
+        ),
+
+        index=False
+    )
+
+    print("\nExperiment Complete\n")
+
+    print(pd.DataFrame(results))
+
+if __name__ == "__main__":
+
+    # -----------------------------------------------------------------
+    # Input directory containing processed images
+    # -----------------------------------------------------------------
+    PROCESSED_DIR = Path(
+        r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Documents\GitHub\BryanProgramImaging2026\Experiments\IMAGES2.0\All Images\preprocessed_imagesv2")
+
+    # -----------------------------------------------------------------
+    # Output directory
+    # -----------------------------------------------------------------
+    OUTPUT_ROOT = PROCESSED_DIR.parent / EXPERIMENT_FOLDER_NAME
+
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+    # -----------------------------------------------------------------
+    # Find processed images
+    # -----------------------------------------------------------------
+    image_paths = sorted(
+        PROCESSED_DIR.glob("*_processed.tif")
+    )
+
+    if not image_paths:
+        raise FileNotFoundError(
+            f"No processed TIF images found in\n{PROCESSED_DIR}"
+        )
+
+    print(f"Found {len(image_paths)} processed images.")
+    print("Beginning Erosion persistence experiment...\n")
+
+    # -----------------------------------------------------------------
+    # Run experiment
+    # -----------------------------------------------------------------
+    run_experiment(
+        image_paths=image_paths,
+        output_root=OUTPUT_ROOT
+    )
+
+    print("\n======================================")
+    print(" Erosion experiment finished.")
+    print(f" Results saved to:\n{OUTPUT_ROOT}")
+    print("======================================")
