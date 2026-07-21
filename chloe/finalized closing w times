@@ -1,0 +1,445 @@
+# -*- coding: utf-8 -*-
+"""
+Integrated Closing Morphological TDA & Machine Learning Pipeline
+"""
+
+import os
+import copy
+import random
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as mcm
+from matplotlib.colors import ListedColormap
+import numba as nb
+import cripser
+import pdb  # Interactive debugging module
+from skimage import io
+from skimage.util import img_as_float
+
+from sklearn.decomposition import PCA
+from sklearn.inspection import DecisionBoundaryDisplay
+from sklearn.metrics import accuracy_score, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    classification_report,
+)
+
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+plt.ion()
+
+# -------------------------------------------------------------------
+# NATIVE MORPHOLOGY & TDA IMPLEMENTATION
+# -------------------------------------------------------------------
+
+def find(condition):
+    return np.nonzero(condition)
+
+def biImg_by_threshold_leq(img, threshold):
+    output_img = np.copy(img)
+    idxs_0 = find(img <= threshold)
+    idxs_1 = find(img > threshold)
+    output_img[idxs_0] = 0
+    output_img[idxs_1] = 1
+    return output_img
+
+@nb.jit(nopython=True)
+def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
+    input_np_array_shape = input_np_array.shape
+    output_np_array = np.zeros(input_np_array_shape)
+    for i in range(input_np_array_shape[0]):
+        for j in range(input_np_array_shape[1]):
+            if input_np_array[i, j] == minimal_pixel_value:
+                output_np_array[i, j] = minimal_pixel_value
+                continue
+            relevant_pixel_values = []
+            for k in range(len(input_list_of_points)):
+                m = i - input_list_of_points[k][1]
+                n = j + input_list_of_points[k][0]
+                if (m >= 0) and (m < input_np_array_shape[0]) and (n >= 0) and (n < input_np_array_shape[1]):
+                    relevant_pixel_values.append(input_np_array[m, n])
+            output_np_array[i, j] = min(relevant_pixel_values)
+    return output_np_array
+
+@nb.jit(nopython=True)
+def dilation(input_np_array, input_list_of_points, maximal_pixel_value=1):
+    input_np_array_shape = input_np_array.shape
+    output_np_array = np.zeros(input_np_array_shape)
+    for i in range(input_np_array_shape[0]):
+        for j in range(input_np_array_shape[1]):
+            if input_np_array[i, j] == maximal_pixel_value:
+                output_np_array[i, j] = maximal_pixel_value
+                continue
+            relevant_pixel_values = []
+            for k in range(len(input_list_of_points)):
+                m = i + input_list_of_points[k][1]
+                n = j - input_list_of_points[k][0]
+                if (m >= 0) and (m < input_np_array_shape[0]) and (n >= 0) and (n < input_np_array_shape[1]):
+                    relevant_pixel_values.append(input_np_array[m, n])
+            output_np_array[i, j] = max(relevant_pixel_values)
+    return output_np_array
+
+def closing(input_np_array, input_list_of_points):
+    return erosion(dilation(input_np_array, input_list_of_points), input_list_of_points)
+
+def get_rectangle_coordinates(input_np_array):
+    input_np_array_shape = np.shape(input_np_array)
+    output_list = []
+    origin_i = int(input_np_array_shape[0] / 2)
+    origin_j = int(input_np_array_shape[1] / 2)
+    for i in range(input_np_array_shape[0]):
+        for j in range(input_np_array_shape[1]):
+            output_list.append(np.array([origin_j - j, origin_i - i]))
+    return output_list
+
+def get_square_SE_list(maximal_SE_lengths):
+    kernel_list = []
+    for i in range(2, maximal_SE_lengths + 1):
+        kernel_list.append(get_rectangle_coordinates(input_np_array=np.zeros((i, i))))
+    return kernel_list
+
+def persistence_of_img(img, maxdim=1):
+    img = np.asarray(img, dtype=np.float64)
+    if hasattr(cripser, "compute_ph"):
+        ph = cripser.compute_ph(img, maxdim=maxdim)
+    else:
+        ph = cripser.computePH(img, maxdim=maxdim)
+    persistence_0 = ph[ph[:, 0] == 0][:, 1:3]
+    persistence_1 = ph[ph[:, 0] == 1][:, 1:3]
+    return [persistence_0, persistence_1]
+
+def persistence_of_morph_filtration(img, kernel_list, morph_type='closing'):
+    img_shape = np.shape(img)
+    img_buff = np.zeros(img_shape) + img
+    for the_kernel in kernel_list:
+        morphed_img = closing(input_np_array=img, input_list_of_points=the_kernel)
+        img_buff = img_buff + morphed_img
+    return persistence_of_img(img_buff)
+
+# -------------------------------------------------------------------
+# FEATURE EXTRACTION & ML BENCHMARK
+# -------------------------------------------------------------------
+
+def extract_10d_barcode(pds):
+    h0, h1 = pds
+    combined = np.vstack([h0, h1]) if (len(h0) > 0 and len(h1) > 0) else (h0 if len(h0) > 0 else h1)
+    if len(combined) == 0:
+        return np.zeros(10)
+    finite_mask = np.isfinite(combined[:, 1])
+    combined_finite = combined[finite_mask]
+    births, deaths = combined_finite[:, 0], combined_finite[:, 1]
+    persistence = deaths - births
+    if len(persistence) == 0:
+        return np.zeros(10)
+    return np.array([
+        np.mean(births), np.std(births), np.median(births), np.max(births),
+        np.mean(deaths), np.std(deaths), np.max(deaths),
+        np.mean(persistence), np.std(persistence), np.sum(persistence)
+    ])
+
+def run_ml_benchmark(X_tda, y, output_dir):
+    """
+    Run machine learning benchmark on extracted TDA barcode features.
+    Saves classifier metrics to the output directory.
+    """
+
+    # ------------------------------------------------------------
+    # Validate features
+    # ------------------------------------------------------------
+    if np.isnan(X_tda).any():
+        raise ValueError("Feature matrix contains NaN values.")
+
+    if np.isinf(X_tda).any():
+        raise ValueError("Feature matrix contains infinite values.")
+
+    print(f"\nFeature matrix shape: {X_tda.shape}")
+    print(f"Number of samples: {len(y)}")
+
+    names = [
+        "Linear SVM",
+        "Neural Network (MLP)"
+    ]
+
+    classifiers = [
+        SVC(
+            kernel="linear",
+            C=1.0,
+            random_state=42
+        ),
+        MLPClassifier(
+            hidden_layer_sizes=(32, 16),
+            max_iter=1000,
+            random_state=42
+        )
+    ]
+
+    # ------------------------------------------------------------
+    # Train/test split
+    # ------------------------------------------------------------
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_tda,
+        y,
+        test_size=0.4,
+        random_state=42,
+        stratify=y
+    )
+
+    # ------------------------------------------------------------
+    # PCA for visualization
+    # ------------------------------------------------------------
+    scaler = StandardScaler()
+
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    pca = PCA(n_components=2, random_state=42)
+
+    X_train_vis = pca.fit_transform(X_train_scaled)
+    X_test_vis = pca.transform(X_test_scaled)
+
+    metrics_records = []
+
+    # ------------------------------------------------------------
+    # Train each classifier
+    # ------------------------------------------------------------
+    for name, clf in zip(names, classifiers):
+
+        print(f"\nTraining {name}...")
+
+        pipeline = make_pipeline(
+            StandardScaler(),
+            clf
+        )
+
+        pipeline.fit(X_train, y_train)
+
+        y_pred = pipeline.predict(X_test)
+
+        accuracy = accuracy_score(y_test, y_pred)
+        precision = precision_score(
+            y_test,
+            y_pred,
+            pos_label=1,
+            zero_division=0
+        )
+        recall = recall_score(
+            y_test,
+            y_pred,
+            pos_label=1,
+            zero_division=0
+        )
+        f1 = f1_score(
+            y_test,
+            y_pred,
+            pos_label=1,
+            zero_division=0
+        )
+
+        metrics_records.append({
+            "Classifier": name,
+            "Accuracy": accuracy,
+            "Precision": precision,
+            "Recall": recall,
+            "F1 Score": f1
+        })
+
+        # --------------------------------------------------------
+        # Print evaluation
+        # --------------------------------------------------------
+        print(f"\n{name}")
+        print(f"Accuracy : {accuracy:.4f}")
+        print(f"Precision: {precision:.4f}")
+        print(f"Recall   : {recall:.4f}")
+        print(f"F1 Score : {f1:.4f}")
+
+        cm = confusion_matrix(y_test, y_pred)
+
+        print("\nConfusion Matrix")
+        print(cm)
+
+        print("\nClassification Report")
+        print(classification_report(
+            y_test,
+            y_pred,
+            zero_division=0
+        ))
+
+        # --------------------------------------------------------
+        # Save predictions
+        # --------------------------------------------------------
+        safe_name = (
+            name.replace(" ", "_")
+                .replace("(", "")
+                .replace(")", "")
+        )
+
+        pred_df = pd.DataFrame({
+            "True Label": y_test,
+            "Predicted Label": y_pred
+        })
+
+        pred_df.to_csv(
+            Path(output_dir) / f"{safe_name}_predictions.csv",
+            index=False
+        )
+
+        # --------------------------------------------------------
+        # PCA decision boundary
+        # --------------------------------------------------------
+        vis_model = make_pipeline(
+            StandardScaler(),
+            clf
+        )
+
+        vis_model.fit(X_train_vis, y_train)
+
+        fig, ax = plt.subplots(figsize=(6, 5))
+
+        DecisionBoundaryDisplay.from_estimator(
+            vis_model,
+            X_train_vis,
+            cmap=plt.cm.coolwarm,
+            alpha=0.3,
+            ax=ax,
+            response_method="predict"
+        )
+
+        ax.scatter(
+            X_train_vis[:, 0],
+            X_train_vis[:, 1],
+            c=y_train,
+            cmap=plt.cm.coolwarm,
+            edgecolor="k",
+            s=35
+        )
+
+        ax.set_title(name)
+        ax.set_xlabel("PC1")
+        ax.set_ylabel("PC2")
+
+        plt.tight_layout()
+
+        plt.savefig(
+            Path(output_dir) /
+            f"{safe_name}_decision_boundary.png",
+            dpi=300
+        )
+
+        plt.close(fig)
+
+    # ------------------------------------------------------------
+    # Save metrics
+    # ------------------------------------------------------------
+    metrics_df = pd.DataFrame(metrics_records)
+
+    metrics_csv = Path(output_dir) / "ml_metrics.csv"
+
+    metrics_df.to_csv(
+        metrics_csv,
+        index=False
+    )
+
+    print("\n📊 --- MACHINE LEARNING RESULTS ---")
+    print(metrics_df.to_string(index=False))
+
+    print(f"\nSaved ML metrics -> {metrics_csv}")
+
+    return metrics_df
+
+if __name__ == "__main__":
+
+    random.seed(101)
+
+    RAW_IMG_DIR = Path(r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Documents\GitHub\BryanProgramImaging2026\Experiments\IMAGES2.0\All Images\preprocessed_imagesv2")
+    raw_paths = sorted(RAW_IMG_DIR.glob("*.tif"))
+
+    RESULTS_DIR = RAW_IMG_DIR.parent / "results_closing_barcode"
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    print(f"Saving all outputs to:\n{RESULTS_DIR}")
+
+    print("=== Phase 1: Running Closing TDA Filtrations ===")
+
+    kernels = get_square_SE_list(maximal_SE_lengths=4)
+
+    X_features = []
+    y_labels = []
+    image_names = []
+
+    for path in raw_paths:
+        print(f"Processing {path.name}")
+
+        img = img_as_float(io.imread(path, as_gray=True))
+        binary_img = biImg_by_threshold_leq(img, threshold=0.5)
+
+        pds = persistence_of_morph_filtration(
+            binary_img,
+            kernels,
+            morph_type="closing",
+        )
+
+        features = extract_10d_barcode(pds)
+
+        X_features.append(features)
+        image_names.append(path.name)
+
+        # Explicit label assignment
+        name = path.stem.lower()
+
+        if "microgravity" in name:
+            y_labels.append(1)
+        elif "control" in name:
+            y_labels.append(0)
+        else:
+            raise ValueError(f"Could not determine class for {path.name}")
+
+    X_features = np.asarray(X_features)
+    y_labels = np.asarray(y_labels)
+
+    feature_columns = [
+        "mean_birth",
+        "std_birth",
+        "median_birth",
+        "max_birth",
+        "mean_death",
+        "std_death",
+        "max_death",
+        "mean_persistence",
+        "std_persistence",
+        "sum_persistence",
+    ]
+
+    feature_df = pd.DataFrame(
+        X_features,
+        columns=feature_columns,
+    )
+
+    feature_df.insert(0, "image", image_names)
+    feature_df["label"] = y_labels
+
+    feature_csv = RESULTS_DIR / "closing_barcode_features.csv"
+    feature_df.to_csv(feature_csv, index=False)
+
+    print(f"Saved feature table -> {feature_csv}")
+
+    np.save(RESULTS_DIR / "X_features.npy", X_features)
+    np.save(RESULTS_DIR / "y_labels.npy", y_labels)
+
+    print("Saved NumPy feature cache.")
+
+    # Run ML benchmark
+    run_ml_benchmark(
+        X_features,
+        y_labels,
+        RESULTS_DIR,
+    )
