@@ -1,0 +1,300 @@
+import os
+import copy
+import random
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as mcm
+from matplotlib.colors import ListedColormap
+import numba as nb
+import cripser
+from skimage import io
+from skimage.util import img_as_float
+import seaborn as sns
+from pathlib import Path
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    confusion_matrix,
+    classification_report,
+)
+
+from sklearn.decomposition import PCA
+from sklearn.inspection import DecisionBoundaryDisplay
+from sklearn.metrics import accuracy_score, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+import imageio.v2 as imageio
+
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+plt.ion()
+
+# -------------------------------------------------------------------
+# NATIVE MORPHOLOGY & TDA IMPLEMENTATION
+# -------------------------------------------------------------------
+
+def find(condition):
+    return np.nonzero(condition)
+
+def biImg_by_threshold_leq(img, threshold):
+    output_img = np.copy(img)
+    idxs_0 = find(img <= threshold)
+    idxs_1 = find(img > threshold)
+    output_img[idxs_0] = 0
+    output_img[idxs_1] = 1
+    return output_img
+
+def biImg_by_threshold_geq(img, threshold):
+    output_img = np.copy(img)
+    idxs_0 = find(img >= threshold)
+    idxs_1 = find(img < threshold)
+    output_img[idxs_0] = 0
+    output_img[idxs_1] = 1
+    return output_img
+
+@nb.jit(nopython=True)
+def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
+    input_np_array_shape = input_np_array.shape
+    output_np_array = np.zeros(input_np_array_shape)
+    for i in range(input_np_array_shape[0]):
+        for j in range(input_np_array_shape[1]):
+            if input_np_array[i, j] == minimal_pixel_value:
+                output_np_array[i, j] = minimal_pixel_value
+                continue
+            relevant_pixel_values = []
+            for k in range(len(input_list_of_points)):
+                m = i - input_list_of_points[k][1]
+                n = j + input_list_of_points[k][0]
+                if (m >= 0) and (m < input_np_array_shape[0]) and (n >= 0) and (n < input_np_array_shape[1]):
+                    relevant_pixel_values.append(input_np_array[m, n])
+            output_np_array[i, j] = min(relevant_pixel_values)
+    return output_np_array
+
+@nb.jit()
+def get_rectangle_coordinates(input_np_array):
+    input_np_array_shape = np.shape(input_np_array)
+    output_list = []
+    origin_i = int(input_np_array_shape[0] / 2)
+    origin_j = int(input_np_array_shape[1] / 2)
+    for i in range(input_np_array_shape[0]):
+        for j in range(input_np_array_shape[1]):
+            output_list.append(np.array([origin_j - j, origin_i - i]))
+    return output_list
+
+def get_square_SE_list(maximal_SE_lengths):
+    kernel_list = []
+    for i in range(2, maximal_SE_lengths + 1):
+        kernel_list.append(get_rectangle_coordinates(input_np_array=np.zeros((i, i))))
+    return kernel_list
+
+def build_erosion_filtration(binary_img, max_steps=20):
+
+    kernel = get_rectangle_coordinates(np.zeros((3,3)))
+
+    current = binary_img.astype(np.float64)
+
+    filtration = current.copy()
+
+    for step in range(max_steps):
+
+        new = erosion(current, kernel)
+
+        if np.array_equal(new, current):
+            break
+
+        current = new
+        filtration += current
+
+    return filtration
+
+def compute_erosion_ph(filtration):
+    """
+    Compute persistent homology from an erosion filtration.
+    """
+
+    if hasattr(cripser, "computePH"):
+        return cripser.computePH(filtration.astype(np.float64), maxdim=1)
+
+    return cripser.compute_ph(filtration.astype(np.float64), maxdim=1)
+
+
+if __name__ == "__main__":
+
+    # -----------------------------------------------------------------
+    # Select the images you want to process
+    # -----------------------------------------------------------------
+    image_files = [
+
+        Path(
+            r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Micro_Hemisphere\fake_micro_001.png"
+        ),
+
+        Path(
+            r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Control_Hemisphere\fake_control001.png"
+        ),
+
+    ]
+
+    # -----------------------------------------------------------------
+    # Output folder
+    # -----------------------------------------------------------------
+    output_dir = (
+        Path(r"C:\Users\chloe.jamieson\OneDrive - Simpson College")
+        / "erosion_results"
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # -----------------------------------------------------------------
+    # Structuring elements
+    # -----------------------------------------------------------------
+    kernels = get_square_SE_list(maximal_SE_lengths=4)
+
+    print(f"Processing {len(image_files)} selected images.")
+
+    for img_path in image_files:
+
+        if not img_path.exists():
+            print(f"Skipping missing file: {img_path}")
+            continue
+
+        print(f"\nProcessing {img_path.name}")
+
+        image = io.imread(img_path, as_gray=True)
+        image = img_as_float(image)
+
+        binary = biImg_by_threshold_leq(image, 0.5)
+        binary = 1 - binary
+        plt.figure(figsize=(6, 6))
+        plt.imshow(binary, cmap="gray")
+        plt.title("Binary Image")
+        plt.axis("off")
+
+        plt.savefig(
+            output_dir / f"{img_path.stem}_binary.png",
+            dpi=300,
+            bbox_inches="tight"
+        )
+
+        plt.close()
+
+        filtration = build_erosion_filtration(
+            binary,
+            max_steps=20
+        )
+        print("Filtration shape:", filtration.shape)
+        print("Min:", filtration.min())
+        print("Max:", filtration.max())
+
+        plt.figure(figsize=(6, 6))
+        plt.imshow(filtration, cmap="viridis")
+        plt.colorbar(label="Erosion Level")
+        plt.title("Erosion Filtration")
+
+        plt.savefig(
+            output_dir / f"{img_path.stem}_erosion_filtration.png",
+            dpi=300,
+            bbox_inches="tight"
+        )
+
+        plt.close()
+
+        # -------------------------------------------------------------
+        # Compute persistent homology
+        # -------------------------------------------------------------
+        ph = compute_erosion_ph(filtration)
+
+        print("Shape:", ph.shape)
+        print(ph[:10])
+
+        h0 = ph[ph[:, 0] == 0]
+        h1 = ph[ph[:, 0] == 1]
+
+        print(f"H0 features: {len(h0)}")
+        print(f"H1 features: {len(h1)}")
+
+        # -------------------------------------------------------------
+        # Save persistence array
+        # -------------------------------------------------------------
+        np.save(
+            output_dir / f"{img_path.stem}_erosion_ph.npy",
+            ph,
+        )
+
+        # -------------------------------------------------------------
+        # Plot persistence diagram
+        # -------------------------------------------------------------
+        births = ph[:, 1]
+        deaths = ph[:, 2]
+
+        INF = np.finfo(np.float64).max
+        finite = deaths < INF
+        if not np.any(finite):
+            print("No finite persistence pairs.")
+            continue
+
+        plot_births = births[finite]
+        plot_deaths = deaths[finite]
+
+        h0 = ph[(ph[:, 0] == 0) & finite]
+        h1 = ph[(ph[:, 0] == 1) & finite]
+
+        plt.figure(figsize=(6, 6))
+
+        if len(h0):
+            plt.scatter(
+                h0[:, 1],
+                h0[:, 2],
+                s=12,
+                label="H0"
+            )
+
+        if len(h1):
+            plt.scatter(
+                h1[:, 1],
+                h1[:, 2],
+                s=12,
+                label="H1"
+            )
+
+        xmin = plot_births.min()
+        xmax = plot_births.max()
+
+        ymin = plot_deaths.min()
+        ymax = plot_deaths.max()
+
+        padding = 0.5
+
+        low = min(xmin, ymin)
+        high = max(xmax, ymax)
+
+        plt.plot(
+            [low, high],
+            [low, high],
+            "k--",
+            linewidth=1
+        )
+
+        plt.xlim(xmin - padding, xmax + padding)
+        plt.ylim(ymin - padding, ymax + padding)
+
+        plt.gca().set_aspect("equal", adjustable="box")
+
+        plt.xlabel("Birth")
+        plt.ylabel("Death")
+        plt.title(img_path.stem)
+        plt.legend()
+
+        plt.savefig(
+            output_dir / f"{img_path.stem}_erosion_diagram.png",
+            dpi=300,
+            bbox_inches="tight"
+        )
+
+        plt.close()
+
+    print("\nFinished processing selected images.")
