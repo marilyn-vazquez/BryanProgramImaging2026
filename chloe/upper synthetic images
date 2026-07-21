@@ -1,0 +1,237 @@
+import os
+import random
+from pathlib import Path
+from time import perf_counter
+
+import cripser as cr
+import numpy as np
+import pandas as pd
+from skimage import io
+from skimage.util import img_as_float
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+import matplotlib.pyplot as plt
+import imageio.v2 as imageio
+
+
+
+# =====================================================================
+# 2. CORE HOMOLOGY & VECTORIZATION FUNCTIONS
+# =====================================================================
+
+from skimage import color
+from skimage.util import img_as_float
+
+def build_upper_star_filtration(loaded_image):
+    image = img_as_float(loaded_image)
+
+    # Convert RGBA -> RGB
+    if image.ndim == 3 and image.shape[2] == 4:
+        image = color.rgba2rgb(image)
+
+    # Convert RGB -> grayscale
+    if image.ndim == 3:
+        image = color.rgb2gray(image)
+
+    image *= 255.0
+
+    return -image.astype(np.float64)
+
+
+def compute_upper_star_ph(filtration_image):
+    """Compute upper-star persistent homology using available Cripser API on negated image."""
+    if hasattr(cr, "computePH"): return cr.computePH(filtration_image, maxdim=1)
+    if hasattr(cr, "compute_ph"): return cr.compute_ph(filtration_image, maxdim=1)
+    raise AttributeError("No compatible Cripser persistent-homology function found.")
+
+# =====================================================================
+# Save Upper-Star Filtration Animation
+# =====================================================================
+
+def save_upper_star_animation(filtration, save_path,
+                              n_steps=30,
+                              duration=0.12):
+    """
+    Save an animated GIF showing the growth of the upper-star filtration.
+
+    Parameters
+    ----------
+    filtration : ndarray
+        Upper-star filtration image.
+    save_path : Path
+        Output GIF filename.
+    n_steps : int
+        Number of filtration levels.
+    duration : float
+        Seconds per frame.
+    """
+
+    thresholds = np.linspace(
+        filtration.min(),
+        filtration.max(),
+        n_steps
+    )
+
+    frames = []
+
+    for t in thresholds:
+
+        # Pixels included in the filtration
+        binary = filtration <= t
+
+        # Convert to 8-bit image
+        frame = (binary.astype(np.uint8)) * 255
+
+        frames.append(frame)
+
+    imageio.mimsave(
+        save_path,
+        frames,
+        duration=duration,
+        loop=0,
+    )
+
+# =====================================================================
+# Main
+# =====================================================================
+
+if __name__ == "__main__":
+
+    # -----------------------------------------------------------------
+    # Select the images you want to process
+    # -----------------------------------------------------------------
+    image_files = [
+
+        Path(
+            r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Micro_Hemisphere\fake_micro_001.png"
+        ),
+
+        Path(
+            r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Control_Hemisphere\fake_control001.png"
+        ),
+
+    ]
+
+    # -----------------------------------------------------------------
+    # Output folder
+    # -----------------------------------------------------------------
+    output_dir = (
+        Path(r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Micro_Hemisphere")
+        / "upper_star"
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Processing {len(image_files)} selected images.")
+
+    for img_path in image_files:
+
+        if not img_path.exists():
+            print(f"Skipping missing file: {img_path}")
+            continue
+
+        print(f"\nProcessing {img_path.name}")
+
+        # -------------------------------------------------------------
+        # Load image
+        # -------------------------------------------------------------
+        image = io.imread(img_path)
+
+        # -------------------------------------------------------------
+        # Build upper-star filtration
+        # -------------------------------------------------------------
+        filtration = build_upper_star_filtration(image)
+        filtration = build_upper_star_filtration(image)
+
+        print("Filtration shape:", filtration.shape)
+        print("Min:", filtration.min())
+        print("Max:", filtration.max())
+
+        # -------------------------------------------------------------
+        # Save filtration animation
+        # -------------------------------------------------------------
+        save_upper_star_animation(
+            filtration,
+            output_dir / f"{img_path.stem}_upper_filtration.gif",
+        )
+
+        # -------------------------------------------------------------
+        # Compute persistent homology
+        # -------------------------------------------------------------
+        ph = compute_upper_star_ph(filtration)
+
+        print("Shape:", ph.shape)
+        print(ph[:10])
+
+        h0 = ph[ph[:, 0] == 0]
+        h1 = ph[ph[:, 0] == 1]
+
+        print(f"H0 features: {len(h0)}")
+        print(f"H1 features: {len(h1)}")
+
+        # -------------------------------------------------------------
+        # Save persistence array
+        # -------------------------------------------------------------
+        np.save(
+            output_dir / f"{img_path.stem}_upper_ph.npy",
+            ph,
+        )
+
+        # -------------------------------------------------------------
+        # Save persistence diagram
+        # -------------------------------------------------------------
+        births = ph[:, 1]
+        deaths = ph[:, 2]
+
+        # Cripser uses the maximum float to represent infinity
+        INF = np.finfo(np.float64).max
+        finite = deaths < INF
+
+        # Keep only finite persistence pairs
+        plot_births = births[finite]
+        plot_deaths = deaths[finite]
+
+        # Separate H0 and H1
+        h0 = ph[(ph[:, 0] == 0) & finite]
+        h1 = ph[(ph[:, 0] == 1) & finite]
+
+        plt.figure(figsize=(6, 6))
+
+        plt.scatter(h0[:, 1], h0[:, 2], s=10, alpha=0.7, label="H0")
+        plt.scatter(h1[:, 1], h1[:, 2], s=10, alpha=0.7, label="H1")
+
+        # Axis limits from the actual data
+        xmin = plot_births.min()
+        xmax = plot_births.max()
+
+        ymin = plot_deaths.min()
+        ymax = plot_deaths.max()
+
+        padding = 2
+
+        plt.xlim(xmin - padding, xmax + padding)
+        plt.ylim(ymin - padding, ymax + padding)
+
+        # Diagonal
+        low = min(xmin, ymin)
+        high = max(xmax, ymax)
+
+        plt.plot([low, high], [low, high], "k--", linewidth=1)
+
+        plt.xlabel("Birth")
+        plt.ylabel("Death")
+        plt.title(img_path.stem)
+        plt.legend()
+
+        plt.savefig(
+            output_dir / f"{img_path.stem}_diagram.png",
+            dpi=300,
+            bbox_inches="tight"
+        )
+        plt.close()
+
+    print("\nFinished processing selected images.")
