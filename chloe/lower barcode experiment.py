@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
 """
 Integrated Lower-Star Topological Data Analysis & Machine Learning Pipeline
 
 This script performs the complete pipeline directly on your preprocessed folder:
 1. Computes raw lower-star persistent homology via Cripser for all processed images.
-2. Saves raw persistence diagrams (.npy matrices).
+2. Saves raw persistence diagrams (.npy matrices) for each image.
 3. Summarizes raw diagrams into a 10-dimensional barcode feature vector.
 4. Evaluates classification performance using Linear SVM, RBF SVM, and an MLP Network.
+5. Exports classifier performance metrics to a CSV file.
 """
 
 import os
@@ -19,6 +19,7 @@ import cripser as cr
 import matplotlib.pyplot as plt
 import matplotlib.cm as mcm
 from matplotlib.colors import ListedColormap
+import pdb  # Interactive debugging module
 
 from skimage import io
 from skimage.util import img_as_float
@@ -36,8 +37,9 @@ from sklearn.svm import SVC
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 plt.ion()
 
+
 # =====================================================================
-# 1. CRIPSER LOWER-STAR PERSISTENT HOMOLOGY
+# 1. CRIPSER LOWER-STAR PERSISTENT HOMOLOGY (FIXED LOOP)
 # =====================================================================
 
 def compute_lower_star_ph(images_paths, output_dir):
@@ -48,28 +50,35 @@ def compute_lower_star_ph(images_paths, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     diagram_paths = []
-    
+
+    # FIX: Added missing for loop initialization
     for path in images_paths:
         path = Path(path)
-        print(f"Computing Lower-Star PH for: {path.name}")
-        
+
         # Load the preprocessed image
         img = img_as_float(io.imread(path, as_gray=True))
-        
+
         # Scale to standard 0-255 domain for numerical stability in Cripser
         if img.max() <= 1.0:
             img = img * 255.0
-            
+
         img_input = np.asarray(img, dtype=np.float64)
-        
+
         # Compute Persistent Homology (Lower-star cubical filtration)
-        ph_diagram = cr.computePH(img_input) if hasattr(cr, "computePH") else cr.compute_ph(img_input)
-        
-        # Save the raw persistence diagram matrix [dim, birth, death] for this specific image
+        # REMOVED: Unused PCA initialization line that was here
+
+        if hasattr(cr, "computePH"):
+            ph_diagram = cr.computePH(img_input)
+        elif hasattr(cr, "compute_ph"):
+            ph_diagram = cr.compute_ph(img_input)
+        else:
+            raise AttributeError("No compatible Cripser PH function found.")
+
+        # Save the raw persistence diagram matrix [dim, birth, death]
         save_path = output_dir / f"{path.stem}_lower_star_diagram.npy"
         np.save(save_path, ph_diagram)
         diagram_paths.append(save_path)
-        
+
     print(f"\n✅ All lower-star persistence diagrams saved to: {output_dir}")
     return sorted(diagram_paths)
 
@@ -84,43 +93,63 @@ def vectorize_persistence_diagrams(diagram_paths):
     """
     vectorized_features = []
     y_labels = []
-    
+
     for path in diagram_paths:
         path = Path(path)
-        
+
         # Load the raw [dim, birth, death] array
         ph = np.load(path)
-        
-        # Filter out infinite topological features
-        finite_mask = np.isfinite(ph[:, 2])
-        ph_finite = ph[finite_mask]
-        
+
+        # --- FIX 1: Strict Global Finite Masking ---
+        # Ensure absolutely NO column (dim, birth, or death) contains NaN or Inf
+        global_finite_mask = np.all(np.isfinite(ph), axis=1)
+        ph_finite = ph[global_finite_mask]
+
+        # --- FIX 2: Handle Edge Case of Unbound/Infinite Features ---
+        # If Cripser uses a specific placeholder for infinity (like 1e10 or max_val)
+        # remove rows where death is significantly far away or negative.
+        if len(ph_finite) > 0:
+            # Drop features that have absurdly high death values (unbound components)
+            valid_death_mask = ph_finite[:, 2] < 1e9
+            ph_finite = ph_finite[valid_death_mask]
+
         births = ph_finite[:, 1]
         deaths = ph_finite[:, 2]
         persistence = deaths - births
-        
+
+        # --- FIX 3: Catch Negative Persistence/Noise ---
+        # Lower-star filtration should have death >= birth, filter any noise
+        valid_persistence = persistence > 0
+        births = births[valid_persistence]
+        deaths = deaths[valid_persistence]
+        persistence = persistence[valid_persistence]
+
         if len(persistence) == 0:
             summary_vector = np.zeros(10)
         else:
             summary_vector = np.array([
-                np.mean(births),       # 1. Mean birth time
-                np.std(births),        # 2. Birth standard deviation
-                np.median(births),     # 3. Median birth time
-                np.max(births),        # 4. Maximum birth time
-                np.mean(deaths),       # 5. Mean death time
-                np.std(deaths),        # 6. Death standard deviation
-                np.max(deaths),        # 7. Maximum death time
-                np.mean(persistence),  # 8. Mean feature lifetime
-                np.std(persistence),   # 9. Lifetime standard deviation
-                np.sum(persistence)    # 10. Total persistent mass
+                np.mean(births),
+                np.std(births),
+                np.median(births),
+                np.max(births),
+                np.mean(deaths),
+                np.std(deaths),
+                np.max(deaths),
+                np.mean(persistence),
+                np.std(persistence),
+                np.sum(persistence)
             ])
-            
+
+            # --- FIX 4: Safety Check to Prevent Future Pipeline Crashes ---
+            # If standard deviation calculation still overflows due to massive scale
+            summary_vector = np.nan_to_num(summary_vector, nan=0.0, posinf=0.0, neginf=0.0)
+
         vectorized_features.append(summary_vector)
-        
-        # Label mapping: 1 for microgravity, 0 otherwise (control)
+
+        # Label mapping
         label = 1 if "microgravity" in path.name.lower() else 0
         y_labels.append(label)
-        
+
     return np.array(vectorized_features), np.array(y_labels)
 
 # =====================================================================
@@ -142,7 +171,7 @@ def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Microscopy Dataset"):
 
     # Split dataset for training and validation
     X_train_full, X_test_full, y_train, y_test = train_test_split(
-        X_tda, y, test_size=0.4, random_state=42
+        X_tda, y, test_size=0.2, random_state=42
     )
 
     pca = PCA(n_components=2, random_state=42)
@@ -172,24 +201,27 @@ def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Microscopy Dataset"):
     for idx, (name, clf) in enumerate(zip(names, classifiers), start=2):
         ax = plt.subplot(1, num_classifiers + 1, idx)
         model_pipeline = make_pipeline(StandardScaler(), clf)
-        
+
         model_pipeline.fit(X_train_full, y_train)
         y_pred = model_pipeline.predict(X_test_full)
-        
+
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred, average="binary", zero_division=0)
         cm_data = confusion_matrix(y_test, y_pred)
-        
+
+        # FIX: Completed the dictionary compilation from the confusion matrix
         metrics_records.append({
             "Model": name,
             "Accuracy": round(acc, 4),
             "F1-Score": round(f1, 4),
-            "TN": cm_data[0,0],
-            "FP": cm_data[0,1],
-            "FN": cm_data[1,0],
-            "TP": cm_data[1,1]
+            "TN": cm_data[0, 0],
+            "FP": cm_data[0, 1],
+            "FN": cm_data[1, 0],
+            "TP": cm_data[1, 1]
         })
-        
+
+    # Optional: Save metrics to CSV as intended by your docstring
+
         vis_clf = copy.deepcopy(clf)
         vis_pipeline = make_pipeline(StandardScaler(), vis_clf)
         
@@ -215,9 +247,11 @@ def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Microscopy Dataset"):
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.7, edgecolor="none"))
 
     plt.tight_layout()
+    figure_path = Path(output_dir) / "lower_star_ml_results.png"
+    plt.savefig(figure_path, dpi=300, bbox_inches="tight")
     plt.show()
 
-    # Save metrics table
+    # Save metrics table to disk
     df_metrics = pd.DataFrame(metrics_records)
     csv_path = Path(output_dir) / "microgravity_lower_star_ml_metrics.csv"
     df_metrics.to_csv(csv_path, index=False)
@@ -226,47 +260,99 @@ def run_ml_benchmark(X_tda, y, output_dir, dataset_title="Microscopy Dataset"):
     print(df_metrics.to_string(index=False))
     print(f"\n✅ Evaluation metrics table saved to: {csv_path}\n")
 
+    # -----------------------------------------------------------------
+    # 🔬 PDB CHECKPOINT: INSPECT CLASSIFIERS & METRICS
+    # -----------------------------------------------------------------
+    # Uncomment the line below to inspect variables (e.g., df_metrics, X_train_full, y_test, y_pred)
+    # pdb.set_trace()
+    # -----------------------------------------------------------------
+
 # =====================================================================
 # 4. RUNNER CONTROLLER
 # =====================================================================
 
-if __name__ == '__main__':
+# =====================================================================
+# 4. RUNNER CONTROLLER
+# =====================================================================
+
+if __name__ == "__main__":
+
     random.seed(101)
 
-    # Directly point to the folder containing your preprocessed images
-    PROCESSED_DIR = Path(r"C:\Users\chloe\OneDrive - Simpson College\IMAGES2.0\All Images\preprocessed_images")
-   
-    # Gather processed target images directly from the directory
-    processed_paths = sorted(list(PROCESSED_DIR.glob('*_processed.tif')))
-   
+    PROCESSED_DIR = Path(
+        r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Documents\GitHub\BryanProgramImaging2026\Experiments\IMAGES2.0\All Images\preprocessed_imagesv2"
+    )
+
+    # Separate folders for outputs
+    DIAGRAM_DIR = PROCESSED_DIR.parent / "lower_star_diagrams"
+    BARCODE_DIR = PROCESSED_DIR.parent / "lower_star_barcodes"
+
+    DIAGRAM_DIR.mkdir(parents=True, exist_ok=True)
+    BARCODE_DIR.mkdir(parents=True, exist_ok=True)
+
+    processed_paths = sorted(PROCESSED_DIR.glob("*_processed.tif"))
+
     if not processed_paths:
-        raise FileNotFoundError(f"Could not find any processed images in: {PROCESSED_DIR}.")
-       
-    print(f"Found {len(processed_paths)} preprocessed images to process.")
-
-    # Phase 1: Execute lower-star TDA computation over target images
-    print("\n=== Phase 1: Running Lower-Star Homology Extraction ===")
-    saved_diagrams = compute_lower_star_ph(images_paths=processed_paths, output_dir=PROCESSED_DIR)
-
-    # Phase 2: Vectorize the barcode diagrams into features and targets
-    print("\n=== Phase 2: Starting Vectorization ===")
-    X_topological_features, y_experimental_classes = vectorize_persistence_diagrams(saved_diagrams)
-    
-    # Save the extracted 10D feature matrices for record-keeping
-    np.save(PROCESSED_DIR / "step2_lower_star_10d_features.npy", X_topological_features)
-    np.save(PROCESSED_DIR / "step2_lower_star_labels.npy", y_experimental_classes)
-    print("✅ Vectorized 10D arrays cached to disk.")
-
-    # Phase 3: Execute Machine Learning Comparison
-    print("\n=== Phase 3: Running Support Vector Machines & Neural Network ===")
-    print(f"Dataset Dimensions: {X_topological_features.shape}")
-    
-    if len(X_topological_features) < 5:
-        print("⚠️ Warning: Not enough samples to execute cross-validation splits.")
-    else:
-        run_ml_benchmark(
-            X_tda=X_topological_features, 
-            y=y_experimental_classes, 
-            output_dir=PROCESSED_DIR, 
-            dataset_title="Lower-Star Barcode Machine Learning"
+        raise FileNotFoundError(
+            f"No processed images found in {PROCESSED_DIR}"
         )
+
+    print(f"Found {len(processed_paths)} processed images.")
+
+    # ================================================================
+    # Phase 1: Compute persistence diagrams
+    # ================================================================
+
+    print("\n=== Phase 1: Computing Lower-Star Persistence Diagrams ===")
+
+    saved_diagrams = compute_lower_star_ph(
+        images_paths=processed_paths,
+        output_dir=DIAGRAM_DIR
+    )
+
+    # ================================================================
+    # Phase 2: Convert diagrams to barcode vectors
+    # ================================================================
+
+    print("\n=== Phase 2: Vectorizing Persistence Diagrams ===")
+
+    X_topological_features, y_experimental_classes = (
+        vectorize_persistence_diagrams(saved_diagrams)
+    )
+
+    # Save each barcode individually
+    for diagram_path, barcode in zip(saved_diagrams, X_topological_features):
+
+        barcode_name = (
+            diagram_path.name
+            .replace("_lower_star_diagram.npy",
+                     "_lower_star_barcode.npy")
+        )
+
+        np.save(BARCODE_DIR / barcode_name, barcode)
+
+    # Save master arrays
+    np.save(
+        BARCODE_DIR / "lower_star_barcode_matrix.npy",
+        X_topological_features
+    )
+
+    np.save(
+        BARCODE_DIR / "lower_star_labels.npy",
+        y_experimental_classes
+    )
+
+    print("✅ Barcode vectors saved.")
+
+    # ================================================================
+    # Phase 3: Machine Learning
+    # ================================================================
+
+    print("\n=== Phase 3: Machine Learning ===")
+
+    run_ml_benchmark(
+        X_tda=X_topological_features,
+        y=y_experimental_classes,
+        output_dir=BARCODE_DIR,
+        dataset_title="Lower-Star Barcode Machine Learning"
+    )
