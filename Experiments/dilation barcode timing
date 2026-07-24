@@ -1,3 +1,7 @@
+"""
+Integrated Morphological Topological Data Analysis (TDA) & Machine Learning Pipeline
+"""
+
 import os
 import copy
 import random
@@ -42,16 +46,69 @@ MLP_RANDOM_STATE = 42
 # =====================================================================
 # 2. NATIVE MORPHOLOGY & TDA IMPLEMENTATION
 # =====================================================================
-def find(condition): return np.nonzero(condition)
+def find(condition):
+    """
+    Finds the indices of elements that satisfy a given condition.
+
+    Parameters
+    ----------
+    condition : array_like or bool
+        Boolean array or condition expression to evaluate.
+
+    Inputs
+    ------
+    - Array or conditional expression evaluated via `np.nonzero`.
+
+    Outputs
+    -------
+    - tuple of ndarrays: Indices of elements where the condition is true.
+    """
+    return np.nonzero(condition)
 
 
 def biImg_by_threshold_leq(img, threshold):
+    """
+    Converts an image into a binary image using a less-than-or-equal threshold rule.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    threshold : float or int
+        Threshold cutoff value.
+
+    Inputs
+    ------
+    - Pixel intensity array `img`.
+
+    Outputs
+    -------
+    - numpy.ndarray: Binarized image array.
+    """
     output_img = np.copy(img)
     output_img[find(img <= threshold)], output_img[find(img > threshold)] = 0, 1
     return output_img
 
 
 def biImg_by_threshold_geq(img, threshold):
+    """
+    Converts an image into a binary image using a greater-than-or-equal threshold rule.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    threshold : float or int
+        Threshold cutoff value.
+
+    Inputs
+    ------
+    - Pixel intensity array `img`.
+
+    Outputs
+    -------
+    - numpy.ndarray: Binarized image array.
+    """
     output_img = np.copy(img)
     output_img[find(img >= threshold)], output_img[find(img < threshold)] = 0, 1
     return output_img
@@ -59,6 +116,26 @@ def biImg_by_threshold_geq(img, threshold):
 
 @nb.jit(nopython=True)
 def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
+    """
+    Performs morphological erosion on a 2D array using Numba compilation and point offsets.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        2D input array to erode.
+    input_list_of_points : list of numpy.ndarray or tuple
+        Structuring element offsets.
+    minimal_pixel_value : int or float, optional
+        Minimum background value. Default is 0.
+
+    Inputs
+    ------
+    - 2D image matrix and kernel points.
+
+    Outputs
+    -------
+    - numpy.ndarray: Eroded 2D array.
+    """
     shape = input_np_array.shape
     output = np.zeros(shape)
     for i in range(shape[0]):
@@ -76,6 +153,26 @@ def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
 
 @nb.jit(nopython=True)
 def dilation(input_np_array, input_list_of_points, maximal_pixel_value=1):
+    """
+    Performs morphological dilation on a 2D array using Numba compilation and point offsets.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        2D input array to dilate.
+    input_list_of_points : list of numpy.ndarray or tuple
+        Structuring element offsets.
+    maximal_pixel_value : int or float, optional
+        Maximum foreground value. Default is 1.
+
+    Inputs
+    ------
+    - 2D image matrix and kernel points.
+
+    Outputs
+    -------
+    - numpy.ndarray: Dilated 2D array.
+    """
     shape = input_np_array.shape
     output = np.zeros(shape)
     for i in range(shape[0]):
@@ -91,24 +188,111 @@ def dilation(input_np_array, input_list_of_points, maximal_pixel_value=1):
     return output
 
 
-def opening(img, points): return dilation(erosion(img, points), points)
+def opening(img, points):
+    """
+    Performs morphological opening (erosion followed by dilation).
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input 2D array.
+    points : list
+        Structuring element points.
+
+    Inputs
+    ------
+    - 2D array and structuring element.
+
+    Outputs
+    -------
+    - numpy.ndarray: Opened 2D array.
+    """
+    return dilation(erosion(img, points), points)
 
 
-def closing(img, points): return erosion(dilation(img, points), points)
+def closing(img, points):
+    """
+    Performs morphological closing (dilation followed by erosion).
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input 2D array.
+    points : list
+        Structuring element points.
+
+    Inputs
+    ------
+    - 2D array and structuring element.
+
+    Outputs
+    -------
+    - numpy.ndarray: Closed 2D array.
+    """
+    return erosion(dilation(img, points), points)
 
 
 @nb.jit()
 def get_rectangle_coordinates(arr):
+    """
+    Generates a list of 2D coordinates centered around an array shape.
+
+    Parameters
+    ----------
+    arr : numpy.ndarray
+        Template array.
+
+    Inputs
+    ------
+    - Array dimensions.
+
+    Outputs
+    -------
+    - list of numpy.ndarray: Centered coordinate offset vectors.
+    """
     shape = np.shape(arr)
     return [np.array([int(shape[1] / 2) - j, int(shape[0] / 2) - i]) for i in range(shape[0]) for j in range(shape[1])]
 
 
-
 def get_square_SE_list(maximal_SE_lengths):
+    """
+    Generates a list of square structuring element coordinate sets up to a max length.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum structural element length.
+
+    Inputs
+    ------
+    - Integer specifying size limit.
+
+    Outputs
+    -------
+    - list: Collection of structuring element lists.
+    """
     return [get_rectangle_coordinates(np.zeros((i, i))) for i in range(2, maximal_SE_lengths + 1)]
 
 
 def persistence_of_img(img, maxdim=1):
+    """
+    Computes persistence diagrams of an image using Cripser.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    maxdim : int, optional
+        Maximum homology dimension. Default is 1.
+
+    Inputs
+    ------
+    - Numerical image array.
+
+    Outputs
+    -------
+    - list: Homology persistence diagrams for dimension 0 and dimension 1.
+    """
     img = np.asarray(img, dtype=np.float64)
     ph = cripser.compute_ph(img, maxdim=maxdim) if hasattr(cripser, "compute_ph") else cripser.computePH(img,
                                                                                                          maxdim=maxdim)
@@ -116,26 +300,55 @@ def persistence_of_img(img, maxdim=1):
 
 
 def persistence_of_morph_filtration(img, kernel_list, morph_type='closing'):
-    img_buff = np.zeros_like(img) + img
-    for kernel in kernel_list:
-        if morph_type == 'opening':
-            morphed = opening(img, kernel)
-        elif morph_type == 'closing':
-            morphed = closing(img, kernel)
-        elif morph_type == 'erosion':
-            morphed = erosion(img, kernel)
-        elif morph_type == 'dilation':
-            morphed = dilation(img, kernel)
-        else:
-            raise ValueError("Invalid morph_type")
-        img_buff += morphed
-    return persistence_of_img(img_buff)
+    """
+    Computes persistence diagrams across a morphological filtration sequence.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    kernel_list : list
+        Sequence of structuring elements.
+    morph_type : str, optional
+        Morphological operation type. Default is 'closing'.
+
+    Inputs
+    ------
+    - Image array and kernel list.
+
+    Outputs
+    -------
+    - list: Persistence diagrams resulting from the filtration.
+    """
+    filtration = build_morph_filtration(
+        img,
+        kernel_list,
+        morph_type
+    )
+
+    return persistence_of_img(filtration)
 
 
 # =====================================================================
 # 3. FEATURE EXTRACTION & PIPELINE RUNNERS
 # =====================================================================
 def extract_10d_barcode(pds):
+    """
+    Extracts a 10-dimensional summary vector from persistence diagrams.
+
+    Parameters
+    ----------
+    pds : list of numpy.ndarray
+        Persistence diagram arrays.
+
+    Inputs
+    ------
+    - Birth-death persistence pairs.
+
+    Outputs
+    -------
+    - numpy.ndarray: 10D statistical feature vector.
+    """
     h0, h1 = pds
     combined = np.vstack([h0, h1]) if (len(h0) > 0 and len(h1) > 0) else (h0 if len(h0) > 0 else h1)
     if len(combined) == 0: return np.zeros(10)
@@ -153,6 +366,26 @@ def extract_10d_barcode(pds):
 
 
 def build_morph_filtration(img, kernel_list, morph_type="closing"):
+    """
+    Builds a cumulative morphological filtration image stack.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Base image array.
+    kernel_list : list
+        List of structuring elements.
+    morph_type : str, optional
+        Type of morphological operation. Default is "closing".
+
+    Inputs
+    ------
+    - Image array and kernels.
+
+    Outputs
+    -------
+    - numpy.ndarray: Cumulative filtration accumulation image.
+    """
     img_buff = np.zeros_like(img) + img
 
     for kernel in kernel_list:
@@ -175,20 +408,31 @@ def build_morph_filtration(img, kernel_list, morph_type="closing"):
         img_buff += morphed
 
     return img_buff
-def persistence_of_morph_filtration(img, kernel_list, morph_type="closing"):
 
-    filtration = build_morph_filtration(
-        img,
-        kernel_list,
-        morph_type
-    )
-
-    return persistence_of_img(filtration)
 
 # =====================================================================
 # 4. MACHINE LEARNING BENCHMARK
 # =====================================================================
 def run_ml_benchmark(df_data, output_dir):
+    """
+    Runs machine learning model benchmarks, calculates metrics, plots decision boundaries, 
+    and saves results to disk.
+
+    Parameters
+    ----------
+    df_data : pandas.DataFrame
+        Dataset containing feature columns and class labels.
+    output_dir : str or pathlib.Path
+        Directory where outputs and evaluation plots are stored.
+
+    Inputs
+    ------
+    - Feature dataframe and target directory path.
+
+    Outputs
+    -------
+    - Disk files: model_results.csv and decision_boundaries.png.
+    """
     feature_cols = [f"Feature_{i + 1}" for i in range(10)]
     X_tda = df_data[feature_cols].values
     y = df_data["Label_Num"].values
@@ -291,7 +535,29 @@ def run_ml_benchmark(df_data, output_dir):
     )
     
 def build_and_time_morph_dataset(image_paths, kernel_list, morph_type, output_root):
+    """
+    Processes images, computes morphological filtrations, persistence diagrams, and feature 
+    vectors, logs execution timings, and saves cache artifacts.
 
+    Parameters
+    ----------
+    image_paths : list of pathlib.Path or str
+        Collection of image paths.
+    kernel_list : list
+        Structuring elements.
+    morph_type : str
+        Type of morphological operation.
+    output_root : str or pathlib.Path
+        Output root directory.
+
+    Inputs
+    ------
+    - Image file paths and configuration parameters.
+
+    Outputs
+    -------
+    - tuple of pandas.DataFrame: Dataset records DataFrame and timing logs DataFrame.
+    """
     ph_dir = output_root / "PH_Arrays"
     vec_dir = output_root / "Vectors"
 
