@@ -1,3 +1,7 @@
+"""
+Module Documentation: Batch Classification Experiment Pipeline
+"""
+
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -16,6 +20,45 @@ def run_batch_experiments(
         output_dir,
         filtration_suffix="_dilation_barcode.npy",
         n_iterations=100):
+    """
+    Executes batch classification experiments using machine learning models 
+    (Support Vector Machine and Multi-Layer Perceptron) on numerical feature 
+    arrays (dilation barcodes). It performs repeated stratified train-test splits 
+    over a specified number of iterations, evaluates performance using accuracy 
+    and F1 scores, and saves both raw and summary statistical CSV reports to 
+    a specified output directory.
+
+    Parameters
+    ----------
+    input_dir : str or pathlib.Path
+        Path to the directory containing the input feature files (NumPy .npy arrays).
+    output_dir : str or pathlib.Path
+        Path to the directory where resulting CSV files and summary reports will 
+        be saved. Created automatically if it does not exist.
+    filtration_suffix : str, optional
+        File name suffix used to locate and filter target input files within 
+        the input_dir. Default is "_dilation_barcode.npy".
+    n_iterations : int, optional
+        Number of randomized train-test split iterations (and distinct random seeds) 
+        to run for cross-validation evaluation. Default is 100.
+
+    Inputs
+    ------
+    - Files on Disk: NumPy binary files (.npy) located inside `input_dir` matching 
+      the `filtration_suffix`.
+    - Labeling Logic: Binary class labels are derived automatically from filenames:
+        * 1: Assigned if the filename contains the substring "microgravity" (case-insensitive).
+        * 0: Assigned to all other control files.
+
+    Outputs
+    -------
+    - Console Logs: Prints runtime progress updates, dataset dimensions, and completion status.
+    - CSV Files Saved to `output_dir`:
+        1. [ClassifierName]_100_iteration_results.csv: Contains individual performance 
+           metrics (Accuracy, F1) across all iterations.
+        2. [ClassifierName]_summary_statistics.csv: Contains statistical summaries 
+           (Mean, Std) computed across the iteration runs for each classifier.
+    """
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -91,7 +134,6 @@ def run_batch_experiments(
                 )
             })
 
-
     # Save results
     for name, data in results.items():
 
@@ -113,10 +155,8 @@ def run_batch_experiments(
             f"{name}_summary_statistics.csv"
         )
 
-
     print("\n✅ Dilation analysis complete.")
     print(f"Results saved to: {output_dir}")
-
 
 
 if __name__ == "__main__":
@@ -128,7 +168,6 @@ if __name__ == "__main__":
 
     # Results folder
     RESULTS_DIR = BARCODE_DIR / "analysis_results"
-
 
     run_batch_experiments(
         BARCODE_DIR,

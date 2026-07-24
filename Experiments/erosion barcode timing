@@ -1,3 +1,7 @@
+"""
+Integrated Erosion Topological Data Analysis (TDA) & Machine Learning Pipeline
+"""
+
 import os
 import random
 from pathlib import Path
@@ -41,15 +45,43 @@ random.seed(101)
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 def find(condition):
-    """Return indices satisfying a condition."""
+    """
+    Finds the indices of elements that satisfy a given condition.
+
+    Parameters
+    ----------
+    condition : array_like or bool
+        Boolean array or condition expression to evaluate.
+
+    Inputs
+    ------
+    - Array or conditional expression evaluated via `np.nonzero`.
+
+    Outputs
+    -------
+    - tuple of ndarrays: Indices of elements where the condition is true.
+    """
     return np.nonzero(condition)
 
 
 def biImg_by_threshold_leq(img, threshold):
     """
-    Convert grayscale image to binary.
-    Pixels <= threshold become 0.
-    Pixels > threshold become 1.
+    Converts a grayscale image into a binary image using a less-than-or-equal threshold rule.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input grayscale image array.
+    threshold : float or int
+        Threshold cutoff value.
+
+    Inputs
+    ------
+    - Pixel intensity array `img`.
+
+    Outputs
+    -------
+    - numpy.ndarray: Binarized image array.
     """
     output_img = np.copy(img)
 
@@ -65,7 +97,24 @@ def biImg_by_threshold_leq(img, threshold):
 @nb.jit(nopython=True)
 def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
     """
-    Binary erosion using a custom structuring element.
+    Performs binary morphological erosion using a custom structuring element with Numba compilation.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        2D input array to erode.
+    input_list_of_points : list of numpy.ndarray or tuple
+        Structuring element coordinate offsets.
+    minimal_pixel_value : int or float, optional
+        Minimum background value. Default is 0.
+
+    Inputs
+    ------
+    - 2D image matrix and kernel point offsets.
+
+    Outputs
+    -------
+    - numpy.ndarray: Eroded 2D array.
     """
     input_shape = input_np_array.shape
     output = np.zeros(input_shape)
@@ -100,7 +149,20 @@ def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
 @nb.jit()
 def get_rectangle_coordinates(input_np_array):
     """
-    Generate coordinates describing a rectangular structuring element.
+    Generates coordinate offsets describing a rectangular structuring element.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Template array representing the structuring element grid dimensions.
+
+    Inputs
+    ------
+    - Template array dimensions.
+
+    Outputs
+    -------
+    - list of numpy.ndarray: Centered coordinate offset vectors.
     """
     shape = np.shape(input_np_array)
 
@@ -118,8 +180,20 @@ def get_rectangle_coordinates(input_np_array):
 
 def get_square_SE_list(maximal_SE_lengths):
     """
-    Create square structuring elements from 2×2 up to the
-    specified maximum side length.
+    Creates square structuring elements ranging from 2x2 up to the specified maximum side length.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum structural element side length.
+
+    Inputs
+    ------
+    - Integer specifying size limit.
+
+    Outputs
+    -------
+    - list: Collection of structuring element lists.
     """
     kernel_list = []
 
@@ -131,10 +205,26 @@ def get_square_SE_list(maximal_SE_lengths):
         )
 
     return kernel_list
+
+
 def persistence_of_img(img, maxdim=1):
     """
-    Compute persistent homology of an image using Cripser.
-    Returns H0 and H1 persistence diagrams separately.
+    Computes persistent homology of an image using Cripser, returning H0 and H1 diagrams separately.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    maxdim : int, optional
+        Maximum homology dimension. Default is 1.
+
+    Inputs
+    ------
+    - Numerical image array.
+
+    Outputs
+    -------
+    - list: Homology persistence diagrams for dimension 0 and dimension 1.
     """
 
     img = np.asarray(img, dtype=np.float64)
@@ -152,7 +242,22 @@ def persistence_of_img(img, maxdim=1):
 
 def compute_erosion_filtration(binary_img, kernel_list):
     """
-    Build the erosion filtration only.
+    Builds the cumulative erosion filtration stack.
+
+    Parameters
+    ----------
+    binary_img : numpy.ndarray
+        Binary image array.
+    kernel_list : list
+        Sequence of structuring elements.
+
+    Inputs
+    ------
+    - Binary image and kernel sequence.
+
+    Outputs
+    -------
+    - numpy.ndarray: Cumulative filtration accumulation image.
     """
 
     img_buffer = np.array(binary_img, dtype=np.float64)
@@ -171,8 +276,20 @@ def compute_erosion_filtration(binary_img, kernel_list):
 
 def vectorize_persistence_diagram(pds):
     """
-    Convert persistence diagrams into a 10-dimensional
-    feature vector.
+    Converts persistence diagrams into a 10-dimensional summary feature vector.
+
+    Parameters
+    ----------
+    pds : list of numpy.ndarray
+        Persistence diagram arrays for H0 and H1.
+
+    Inputs
+    ------
+    - Birth-death persistence pairs.
+
+    Outputs
+    -------
+    - numpy.ndarray: 10D statistical feature vector.
     """
 
     h0, h1 = pds
@@ -221,10 +338,23 @@ def vectorize_persistence_diagram(pds):
         neginf=0.0
     )
 
+
 def get_image_id(image_path):
     """
-    Remove the file extension and trailing '_processed'
-    from the filename.
+    Removes the file extension and trailing '_processed' from the filename.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path to the image file.
+
+    Inputs
+    ------
+    - Image file path.
+
+    Outputs
+    -------
+    - str: Cleaned image identifier string.
     """
     image_id = Path(image_path).stem
 
@@ -236,7 +366,20 @@ def get_image_id(image_path):
 
 def get_label_from_filename(image_path):
     """
-    Determine class label from filename.
+    Determines class label and string descriptor from filename.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path to the image file.
+
+    Inputs
+    ------
+    - Image file path.
+
+    Outputs
+    -------
+    - tuple: Numeric label (int) and string label (str).
     """
 
     filename = Path(image_path).name.lower()
@@ -262,8 +405,32 @@ def build_and_time_erosion_dataset(
         save_recomputed_ph=True,
 ):
     """
-    Compute erosion persistence diagrams, feature vectors,
-    and timing information for every image.
+    Computes erosion persistence diagrams, feature vectors, and execution timings for every image.
+
+    Parameters
+    ----------
+    image_paths : list of pathlib.Path or str
+        Collection of image paths.
+    ph_output_dir : str or pathlib.Path
+        Directory to store persistence diagram arrays.
+    image_vector_output_dir : str or pathlib.Path
+        Directory to store vector arrays.
+    filtration_name : str
+        Name of the filtration technique.
+    vectorization_method : str
+        Name of the vectorization method.
+    preprocessing_version : str
+        Version identifier for preprocessing.
+    save_recomputed_ph : bool, optional
+        Whether to save persistence diagram files to disk. Default is True.
+
+    Inputs
+    ------
+    - Image file paths and experiment configuration settings.
+
+    Outputs
+    -------
+    - tuple of pandas.DataFrame: Dataset records DataFrame and timing logs DataFrame.
     """
 
     os.makedirs(ph_output_dir, exist_ok=True)
@@ -395,9 +562,34 @@ def build_and_time_erosion_dataset(
         pd.DataFrame(dataset_records),
         pd.DataFrame(timing_records)
     )
+
+
 def evaluate_model(model, name, X_train, X_test, y_train, y_test):
     """
-    Train and evaluate a machine learning model.
+    Trains and evaluates a machine learning model pipeline.
+
+    Parameters
+    ----------
+    model : estimator object
+        Unfitted scikit-learn model instance.
+    name : str
+        Model descriptor name.
+    X_train : numpy.ndarray
+        Training feature matrix.
+    X_test : numpy.ndarray
+        Testing feature matrix.
+    y_train : numpy.ndarray
+        Training target labels.
+    y_test : numpy.ndarray
+        Testing target labels.
+
+    Inputs
+    ------
+    - Model estimator, name, and split feature/target datasets.
+
+    Outputs
+    -------
+    - dict: Evaluation metrics dictionary including execution time, accuracy, F1-score, and confusion matrix.
     """
 
     t0 = perf_counter()
@@ -443,7 +635,22 @@ def evaluate_model(model, name, X_train, X_test, y_train, y_test):
 
 def run_experiment(image_paths, output_root):
     """
-    Execute the complete erosion experiment.
+    Executes the complete erosion topological data analysis experiment pipeline.
+
+    Parameters
+    ----------
+    image_paths : list of pathlib.Path or str
+        Collection of processed image paths.
+    output_root : str or pathlib.Path
+        Output directory path to store CSV reports and features.
+
+    Inputs
+    ------
+    - Image paths and output root directory.
+
+    Outputs
+    -------
+    - Disk files: dataset.csv, image_timing.csv, timing_summary.csv, and model_results.csv.
     """
 
     ph_dir = os.path.join(
@@ -585,6 +792,7 @@ def run_experiment(image_paths, output_root):
     print("\nExperiment Complete\n")
 
     print(pd.DataFrame(results))
+
 
 if __name__ == "__main__":
 

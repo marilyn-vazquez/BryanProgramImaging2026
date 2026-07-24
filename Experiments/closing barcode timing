@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Integrated Closing Morphological TDA & Machine Learning Pipeline
 """
@@ -43,9 +42,44 @@ plt.ion()
 # -------------------------------------------------------------------
 
 def find(condition):
+    """
+    Finds the indices of elements that satisfy a given condition.
+
+    Parameters
+    ----------
+    condition : array_like or bool
+        Boolean array or condition expression to evaluate.
+
+    Inputs
+    ------
+    - Array or conditional expression evaluated via `np.nonzero`.
+
+    Outputs
+    -------
+    - tuple of ndarrays: Indices of elements where the condition is true.
+    """
     return np.nonzero(condition)
 
 def biImg_by_threshold_leq(img, threshold):
+    """
+    Converts a grayscale image into a binary image using a threshold value 
+    where pixels less than or equal to the threshold are set to 0, and others to 1.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    threshold : float or int
+        Threshold value for binarization.
+
+    Inputs
+    ------
+    - Grayscale pixel intensity array `img`.
+
+    Outputs
+    -------
+    - numpy.ndarray: Binarized image array containing 0s and 1s.
+    """
     output_img = np.copy(img)
     idxs_0 = find(img <= threshold)
     idxs_1 = find(img > threshold)
@@ -55,6 +89,27 @@ def biImg_by_threshold_leq(img, threshold):
 
 @nb.jit(nopython=True)
 def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
+    """
+    Performs morphological erosion on a 2D NumPy array using a compiled Numba function 
+    and a structural element list of point offsets.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        2D input image or array to erode.
+    input_list_of_points : list of numpy.ndarray or tuple
+        Structural element point offsets relative to the origin.
+    minimal_pixel_value : int or float, optional
+        Default minimum value placeholder. Default is 0.
+
+    Inputs
+    ------
+    - 2D image matrix and coordinate offset structures.
+
+    Outputs
+    -------
+    - numpy.ndarray: ERODED 2D array of the same shape.
+    """
     input_np_array_shape = input_np_array.shape
     output_np_array = np.zeros(input_np_array_shape)
     for i in range(input_np_array_shape[0]):
@@ -73,6 +128,27 @@ def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
 
 @nb.jit(nopython=True)
 def dilation(input_np_array, input_list_of_points, maximal_pixel_value=1):
+    """
+    Performs morphological dilation on a 2D NumPy array using a compiled Numba function 
+    and structural element offsets.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        2D input image or array to dilate.
+    input_list_of_points : list of numpy.ndarray or tuple
+        Structural element point offsets relative to the origin.
+    maximal_pixel_value : int or float, optional
+        Default maximum value placeholder. Default is 1.
+
+    Inputs
+    ------
+    - 2D image matrix and coordinate offset structures.
+
+    Outputs
+    -------
+    - numpy.ndarray: Dilated 2D array of the same shape.
+    """
     input_np_array_shape = input_np_array.shape
     output_np_array = np.zeros(input_np_array_shape)
     for i in range(input_np_array_shape[0]):
@@ -90,9 +166,45 @@ def dilation(input_np_array, input_list_of_points, maximal_pixel_value=1):
     return output_np_array
 
 def closing(input_np_array, input_list_of_points):
+    """
+    Performs morphological closing (dilation followed by erosion) on a 2D array 
+    using a specified structuring element.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        2D input array.
+    input_list_of_points : list
+        Structuring element point coordinates.
+
+    Inputs
+    ------
+    - 2D NumPy array and structuring element offsets.
+
+    Outputs
+    -------
+    - numpy.ndarray: Closed 2D array.
+    """
     return erosion(dilation(input_np_array, input_list_of_points), input_list_of_points)
 
 def get_rectangle_coordinates(input_np_array):
+    """
+    Generates a list of 2D relative coordinate offsets centered around the middle 
+    of an input array shape.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Array whose dimensions define the bounding spatial grid.
+
+    Inputs
+    ------
+    - Template structural array or matrix dimensions.
+
+    Outputs
+    -------
+    - list of numpy.ndarray: List containing 2D coordinate offsets relative to the center origin.
+    """
     input_np_array_shape = np.shape(input_np_array)
     output_list = []
     origin_i = int(input_np_array_shape[0] / 2)
@@ -103,12 +215,46 @@ def get_rectangle_coordinates(input_np_array):
     return output_list
 
 def get_square_SE_list(maximal_SE_lengths):
+    """
+    Generates a list of square structuring elements of increasing sizes up to a maximum length.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum side length for the square structuring elements.
+
+    Inputs
+    ------
+    - Integer specifying max kernel size.
+
+    Outputs
+    -------
+    - list: Collection of square structuring element coordinate lists.
+    """
     kernel_list = []
     for i in range(2, maximal_SE_lengths + 1):
         kernel_list.append(get_rectangle_coordinates(input_np_array=np.zeros((i, i))))
     return kernel_list
 
 def persistence_of_img(img, maxdim=1):
+    """
+    Computes persistent homology diagrams for an image using the `cripser` package.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    maxdim : int, optional
+        Maximum homology dimension to compute. Default is 1.
+
+    Inputs
+    ------
+    - Numerical image array.
+
+    Outputs
+    -------
+    - list of numpy.ndarray: Filtered persistence diagrams separated into dimension 0 and dimension 1.
+    """
     img = np.asarray(img, dtype=np.float64)
     if hasattr(cripser, "compute_ph"):
         ph = cripser.compute_ph(img, maxdim=maxdim)
@@ -119,6 +265,27 @@ def persistence_of_img(img, maxdim=1):
     return [persistence_0, persistence_1]
 
 def persistence_of_morph_filtration(img, kernel_list, morph_type='closing'):
+    """
+    Computes persistence diagrams across a morphological filtration sequence 
+    (such as sequential closing operations with growing structuring elements).
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Base input image array.
+    kernel_list : list
+        Sequence of structuring elements for filtration.
+    morph_type : str, optional
+        Type of morphological operation. Default is 'closing'.
+
+    Inputs
+    ------
+    - Image array and list of structuring element kernels.
+
+    Outputs
+    -------
+    - list: Persistent homology diagrams derived from the filtration accumulation stack.
+    """
     img_shape = np.shape(img)
     img_buff = np.zeros(img_shape) + img
     for the_kernel in kernel_list:
@@ -131,6 +298,23 @@ def persistence_of_morph_filtration(img, kernel_list, morph_type='closing'):
 # -------------------------------------------------------------------
 
 def extract_10d_barcode(pds):
+    """
+    Extracts a fixed 10-dimensional statistical feature vector from persistence diagrams.
+
+    Parameters
+    ----------
+    pds : list of numpy.ndarray
+        Persistence diagram arrays for different homology dimensions.
+
+    Inputs
+    ------
+    - Persistence diagram birth-death pairs across dimensions.
+
+    Outputs
+    -------
+    - numpy.ndarray: 10-element vector containing statistical summaries 
+      (mean, std, median, max for births/deaths/persistence and sum of persistence).
+    """
     h0, h1 = pds
     combined = np.vstack([h0, h1]) if (len(h0) > 0 and len(h1) > 0) else (h0 if len(h0) > 0 else h1)
     if len(combined) == 0:
@@ -149,8 +333,27 @@ def extract_10d_barcode(pds):
 
 def run_ml_benchmark(X_tda, y, output_dir):
     """
-    Run machine learning benchmark on extracted TDA barcode features.
-    Saves classifier metrics to the output directory.
+    Runs machine learning classification benchmarks (Linear SVM and MLP) on extracted 
+    TDA barcode features, generates evaluation metrics, classification reports, 
+    confusion matrices, PCA decision boundary figures, and saves outputs to disk.
+
+    Parameters
+    ----------
+    X_tda : numpy.ndarray
+        Feature matrix containing extracted persistence barcode descriptors.
+    y : numpy.ndarray
+        Corresponding class label array.
+    output_dir : str or pathlib.Path
+        Directory path where metrics CSV files and visualization plots are saved.
+
+    Inputs
+    ------
+    - Feature matrix `X_tda` and label array `y`.
+
+    Outputs
+    -------
+    - pandas.DataFrame: Summary table of metrics (Accuracy, Precision, Recall, F1 Score).
+    - Disk artifacts: Prediction CSV files, summary metric CSV files, and decision boundary PNG plots.
     """
 
     # ------------------------------------------------------------

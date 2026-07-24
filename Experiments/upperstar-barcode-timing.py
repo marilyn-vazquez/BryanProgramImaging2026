@@ -1,17 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Jul 20 13:08:11 2026
-
-@author: chloe
-"""
-
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Jul 20 13:05:53 2026
-
-@author: chloe
-"""
-
 """
 Timed Upper-Star Barcode Persistence Homology and Machine Learning Experiment
 @author: Chloe
@@ -52,7 +38,23 @@ SAVE_RECOMPUTED_PH = True
 # 2. CORE HOMOLOGY & VECTORIZATION FUNCTIONS
 # =====================================================================
 def build_upper_star_filtration(loaded_image):
-    """Convert to float, scale to standard 0-255 domain, negate for upper-star filtration, return float64 array."""
+    """
+    Converts an input image to float, scales it to standard 0-255 domain,
+    and negates values to invert lower-star filtration into upper-star filtration.
+
+    Parameters
+    ----------
+    loaded_image : numpy.ndarray
+        Raw loaded image array.
+
+    Inputs
+    ------
+    - Loaded image array.
+
+    Outputs
+    -------
+    - numpy.ndarray: Scaled and negated float64 image array for upper-star filtration.
+    """
     image = img_as_float(loaded_image)
     if image.max() <= 1.0:
         image = image * 255.0
@@ -62,14 +64,44 @@ def build_upper_star_filtration(loaded_image):
 
 
 def compute_upper_star_ph(filtration_image):
-    """Compute upper-star persistent homology using available Cripser API on negated image."""
+    """
+    Computes upper-star persistent homology using available Cripser API on the negated image.
+
+    Parameters
+    ----------
+    filtration_image : numpy.ndarray
+        Inverted/negated filtration image array.
+
+    Inputs
+    ------
+    - Filtration image array.
+
+    Outputs
+    -------
+    - numpy.ndarray: Persistent homology diagram.
+    """
     if hasattr(cr, "computePH"): return cr.computePH(filtration_image, maxdim=1)
     if hasattr(cr, "compute_ph"): return cr.compute_ph(filtration_image, maxdim=1)
     raise AttributeError("No compatible Cripser persistent-homology function found.")
 
 
 def vectorize_persistence_diagram(ph_diagram):
-    """Convert raw persistence diagram into a clean 10-dimensional summary vector."""
+    """
+    Converts a raw persistence diagram into a clean 10-dimensional summary feature vector.
+
+    Parameters
+    ----------
+    ph_diagram : numpy.ndarray
+        Raw persistent homology diagram.
+
+    Inputs
+    ------
+    - Persistent homology diagram array.
+
+    Outputs
+    -------
+    - numpy.ndarray: 10D statistical feature vector.
+    """
     ph = np.asarray(ph_diagram, dtype=np.float64)
     if ph.size == 0: return np.zeros(10, dtype=np.float64)
 
@@ -102,14 +134,44 @@ def vectorize_persistence_diagram(ph_diagram):
 # 3. UTILITY & IMAGE HELPERS
 # =====================================================================
 def get_image_id(image_path):
-    """Remove extension and trailing '_processed' suffix."""
+    """
+    Removes file extension and trailing '_processed' suffix from the filename.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path to the image file.
+
+    Inputs
+    ------
+    - Image file path.
+
+    Outputs
+    -------
+    - str: Cleaned image identifier string.
+    """
     image_id = Path(image_path).stem
     if image_id.lower().endswith("_processed"): image_id = image_id[:-10]
     return image_id
 
 
 def get_label_from_filename(image_path):
-    """Determine numeric and string class label from filename."""
+    """
+    Determines numeric and string class labels based on the filename.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path to the image file.
+
+    Inputs
+    ------
+    - Image file path.
+
+    Outputs
+    -------
+    - tuple: Numeric label (int) and string label (str).
+    """
     filename = Path(image_path).name.lower()
     if "microgravity" in filename: return 1, "Microgravity"
     if "control" in filename: return 0, "Control"
@@ -124,7 +186,34 @@ def build_and_time_upper_star_dataset(
         filtration_name, vectorization_method, preprocessing_version,
         save_recomputed_ph=True,
 ):
-    """Recompute, time, and process all image pipeline stages using upper-star filtration."""
+    """
+    Recomputes, times, and processes all image pipeline stages using upper-star filtration.
+
+    Parameters
+    ----------
+    image_paths : list of pathlib.Path or str
+        Collection of image paths.
+    ph_output_dir : str or pathlib.Path
+        Directory to store persistence diagram arrays.
+    image_vector_output_dir : str or pathlib.Path
+        Directory to store vector arrays.
+    filtration_name : str
+        Name of the filtration technique.
+    vectorization_method : str
+        Name of the vectorization method.
+    preprocessing_version : str
+        Version identifier for preprocessing.
+    save_recomputed_ph : bool, optional
+        Whether to save persistence diagram files to disk. Default is True.
+
+    Inputs
+    ------
+    - Image paths and configuration parameters.
+
+    Outputs
+    -------
+    - tuple of pandas.DataFrame: Dataset records DataFrame and timing logs DataFrame.
+    """
     os.makedirs(ph_output_dir, exist_ok=True)
     os.makedirs(image_vector_output_dir, exist_ok=True)
 
@@ -175,7 +264,32 @@ def build_and_time_upper_star_dataset(
 # 5. MACHINE LEARNING MODEL PIPELINE
 # =====================================================================
 def evaluate_model(model, name, X_train, X_test, y_train, y_test):
-    """Train and evaluate a standard ML model, recording accuracy and performance."""
+    """
+    Trains and evaluates a standard machine learning model, recording accuracy, F1-score, and performance.
+
+    Parameters
+    ----------
+    model : estimator object
+        Unfitted scikit-learn model instance.
+    name : str
+        Model descriptor name.
+    X_train : numpy.ndarray
+        Training feature matrix.
+    X_test : numpy.ndarray
+        Testing feature matrix.
+    y_train : numpy.ndarray
+        Training target labels.
+    y_test : numpy.ndarray
+        Testing target labels.
+
+    Inputs
+    ------
+    - Model estimator, name, and split feature/target datasets.
+
+    Outputs
+    -------
+    - dict: Evaluation metrics dictionary including execution time, accuracy, F1-score, and confusion matrix counts.
+    """
     t0 = perf_counter()
     pipeline = make_pipeline(StandardScaler(), model)
     pipeline.fit(X_train, y_train)
@@ -191,7 +305,24 @@ def evaluate_model(model, name, X_train, X_test, y_train, y_test):
 
 
 def run_experiment(image_paths, output_root):
-    """Execute the full data construction and model assessment pipeline."""
+    """
+    Executes the full data construction and model assessment pipeline.
+
+    Parameters
+    ----------
+    image_paths : list of pathlib.Path or str
+        Collection of processed image paths.
+    output_root : str or pathlib.Path
+        Output directory path to store CSV reports and features.
+
+    Inputs
+    ------
+    - Image paths and output root directory.
+
+    Outputs
+    -------
+    - Disk files: dataset.csv, image_timing.csv, timing_summary.csv, and model_results.csv.
+    """
     ph_dir = os.path.join(output_root, "PH_Arrays")
     vec_dir = os.path.join(output_root, "Vectors")
 

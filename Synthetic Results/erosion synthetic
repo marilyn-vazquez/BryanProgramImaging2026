@@ -1,3 +1,9 @@
+"""
+Created on Mon Jul 20 13:08:11 2026
+
+@author: chloe
+"""
+
 import os
 import copy
 import random
@@ -12,7 +18,6 @@ import cripser
 from skimage import io
 from skimage.util import img_as_float
 import seaborn as sns
-from pathlib import Path
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -22,7 +27,6 @@ from sklearn.metrics import (
 
 from sklearn.decomposition import PCA
 from sklearn.inspection import DecisionBoundaryDisplay
-from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
@@ -38,9 +42,43 @@ plt.ion()
 # -------------------------------------------------------------------
 
 def find(condition):
+    """
+    Find indices where condition evaluates to true.
+
+    Parameters
+    ----------
+    condition : numpy.ndarray
+        Boolean array condition.
+
+    Inputs
+    ------
+    - Boolean condition array.
+
+    Outputs
+    -------
+    - tuple: Indices where condition is true.
+    """
     return np.nonzero(condition)
 
 def biImg_by_threshold_leq(img, threshold):
+    """
+    Binarize image where values less than or equal to threshold become 0, else 1.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    threshold : float
+        Threshold value.
+
+    Inputs
+    ------
+    - Input image array and threshold float.
+
+    Outputs
+    -------
+    - numpy.ndarray: Binarized image array.
+    """
     output_img = np.copy(img)
     idxs_0 = find(img <= threshold)
     idxs_1 = find(img > threshold)
@@ -49,6 +87,24 @@ def biImg_by_threshold_leq(img, threshold):
     return output_img
 
 def biImg_by_threshold_geq(img, threshold):
+    """
+    Binarize image where values greater than or equal to threshold become 0, else 1.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Input image array.
+    threshold : float
+        Threshold value.
+
+    Inputs
+    ------
+    - Input image array and threshold float.
+
+    Outputs
+    -------
+    - numpy.ndarray: Binarized image array.
+    """
     output_img = np.copy(img)
     idxs_0 = find(img >= threshold)
     idxs_1 = find(img < threshold)
@@ -58,6 +114,26 @@ def biImg_by_threshold_geq(img, threshold):
 
 @nb.jit(nopython=True)
 def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
+    """
+    Performs morphological erosion on an image array using a given structuring element.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Input 2D image array.
+    input_list_of_points : list of numpy.ndarray
+        Structuring element offset coordinates.
+    minimal_pixel_value : int or float, optional
+        Minimum background pixel value. Default is 0.
+
+    Inputs
+    ------
+    - Input image array, structuring element offset list, and minimal pixel value.
+
+    Outputs
+    -------
+    - numpy.ndarray: Eroded output image array.
+    """
     input_np_array_shape = input_np_array.shape
     output_np_array = np.zeros(input_np_array_shape)
     for i in range(input_np_array_shape[0]):
@@ -76,6 +152,22 @@ def erosion(input_np_array, input_list_of_points, minimal_pixel_value=0):
 
 @nb.jit()
 def get_rectangle_coordinates(input_np_array):
+    """
+    Generates centered relative coordinate offsets for structuring elements.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Zero-filled template array defining structuring element dimensions.
+
+    Inputs
+    ------
+    - Template zero array.
+
+    Outputs
+    -------
+    - list: List of coordinate offset arrays.
+    """
     input_np_array_shape = np.shape(input_np_array)
     output_list = []
     origin_i = int(input_np_array_shape[0] / 2)
@@ -86,13 +178,46 @@ def get_rectangle_coordinates(input_np_array):
     return output_list
 
 def get_square_SE_list(maximal_SE_lengths):
+    """
+    Generates a list of square structuring element kernels of increasing sizes.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum square kernel length dimension.
+
+    Inputs
+    ------
+    - Maximum kernel length integer.
+
+    Outputs
+    -------
+    - list: List of structuring element coordinate lists.
+    """
     kernel_list = []
     for i in range(2, maximal_SE_lengths + 1):
         kernel_list.append(get_rectangle_coordinates(input_np_array=np.zeros((i, i))))
     return kernel_list
 
 def build_erosion_filtration(binary_img, max_steps=20):
+    """
+    Builds an erosion filtration sequence across iterative erosion steps.
 
+    Parameters
+    ----------
+    binary_img : numpy.ndarray
+        Input binary image array.
+    max_steps : int, optional
+        Maximum number of erosion iterations. Default is 20.
+
+    Inputs
+    ------
+    - Binary image array and maximum steps integer.
+
+    Outputs
+    -------
+    - numpy.ndarray: Cumulative filtration image array.
+    """
     kernel = get_rectangle_coordinates(np.zeros((3,3)))
 
     current = binary_img.astype(np.float64)
@@ -114,8 +239,20 @@ def build_erosion_filtration(binary_img, max_steps=20):
 def compute_erosion_ph(filtration):
     """
     Compute persistent homology from an erosion filtration.
-    """
 
+    Parameters
+    ----------
+    filtration : numpy.ndarray
+        Input filtration image array.
+
+    Inputs
+    ------
+    - Filtration image array.
+
+    Outputs
+    -------
+    - numpy.ndarray: Persistent homology diagram array.
+    """
     if hasattr(cripser, "computePH"):
         return cripser.computePH(filtration.astype(np.float64), maxdim=1)
 

@@ -6,7 +6,7 @@ from time import perf_counter
 import cripser as cr
 import numpy as np
 import pandas as pd
-from skimage import io
+from skimage import io, color
 from skimage.util import img_as_float
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
@@ -18,15 +18,27 @@ import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 
 
-
 # =====================================================================
 # 2. CORE HOMOLOGY & VECTORIZATION FUNCTIONS
 # =====================================================================
-
-from skimage import color
-from skimage.util import img_as_float
-
 def build_upper_star_filtration(loaded_image):
+    """
+    Converts an input image to float, handles RGBA/RGB-to-grayscale conversion,
+    scales to standard 0-255 domain, and negates values for upper-star filtration.
+
+    Parameters
+    ----------
+    loaded_image : numpy.ndarray
+        Raw loaded image array.
+
+    Inputs
+    ------
+    - Loaded image array.
+
+    Outputs
+    -------
+    - numpy.ndarray: Processed float64 image array for upper-star filtration.
+    """
     image = img_as_float(loaded_image)
 
     # Convert RGBA -> RGB
@@ -37,21 +49,84 @@ def build_upper_star_filtration(loaded_image):
     if image.ndim == 3:
         image = color.rgb2gray(image)
 
-    image *= 255.0
+    if image.max() <= 1.0:
+        image = image * 255.0
 
-    return -image.astype(np.float64)
+    # Negate image values to invert lower-star filtration into upper-star filtration
+    inverted_image = -image
+    return np.asarray(inverted_image, dtype=np.float64)
 
 
 def compute_upper_star_ph(filtration_image):
-    """Compute upper-star persistent homology using available Cripser API on negated image."""
+    """
+    Computes upper-star persistent homology using available Cripser API on the negated image.
+
+    Parameters
+    ----------
+    filtration_image : numpy.ndarray
+        Inverted/negated filtration image array.
+
+    Inputs
+    ------
+    - Filtration image array.
+
+    Outputs
+    -------
+    - numpy.ndarray: Persistent homology diagram.
+    """
     if hasattr(cr, "computePH"): return cr.computePH(filtration_image, maxdim=1)
     if hasattr(cr, "compute_ph"): return cr.compute_ph(filtration_image, maxdim=1)
     raise AttributeError("No compatible Cripser persistent-homology function found.")
 
+
+def vectorize_persistence_diagram(ph_diagram):
+    """
+    Converts a raw persistence diagram into a clean 10-dimensional summary feature vector.
+
+    Parameters
+    ----------
+    ph_diagram : numpy.ndarray
+        Raw persistent homology diagram.
+
+    Inputs
+    ------
+    - Persistent homology diagram array.
+
+    Outputs
+    -------
+    - numpy.ndarray: 10D statistical feature vector.
+    """
+    ph = np.asarray(ph_diagram, dtype=np.float64)
+    if ph.size == 0: return np.zeros(10, dtype=np.float64)
+
+    # Filter out infinite and absurdly large death values (> 1e9)
+    ph_finite = ph[np.all(np.isfinite(ph), axis=1)]
+    if len(ph_finite) == 0: return np.zeros(10, dtype=np.float64)
+
+    ph_finite = ph_finite[ph_finite[:, 2] < 1e9]
+    if len(ph_finite) == 0: return np.zeros(10, dtype=np.float64)
+
+    # Extract births, deaths, and enforce positive persistence
+    births, deaths = ph_finite[:, 1], ph_finite[:, 2]
+    persistence = deaths - births
+
+    valid_mask = persistence > 0
+    births, deaths, persistence = births[valid_mask], deaths[valid_mask], persistence[valid_mask]
+    if len(persistence) == 0: return np.zeros(10, dtype=np.float64)
+
+    # Construct 10D vector: [Mean/Std/Med/Max Birth, Mean/Std/Max Death, Mean/Std/Sum Pers]
+    summary_vector = np.array([
+        np.mean(births), np.std(births), np.median(births), np.max(births),
+        np.mean(deaths), np.std(deaths), np.max(deaths),
+        np.mean(persistence), np.std(persistence), np.sum(persistence)
+    ], dtype=np.float64)
+
+    return np.nan_to_num(summary_vector, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 # =====================================================================
 # Save Upper-Star Filtration Animation
 # =====================================================================
-
 def save_upper_star_animation(filtration, save_path,
                               n_steps=30,
                               duration=0.12):
@@ -69,7 +144,6 @@ def save_upper_star_animation(filtration, save_path,
     duration : float
         Seconds per frame.
     """
-
     thresholds = np.linspace(
         filtration.min(),
         filtration.max(),
@@ -79,7 +153,6 @@ def save_upper_star_animation(filtration, save_path,
     frames = []
 
     for t in thresholds:
-
         # Pixels included in the filtration
         binary = filtration <= t
 
@@ -95,25 +168,22 @@ def save_upper_star_animation(filtration, save_path,
         loop=0,
     )
 
+
 # =====================================================================
 # Main
 # =====================================================================
-
 if __name__ == "__main__":
 
     # -----------------------------------------------------------------
     # Select the images you want to process
     # -----------------------------------------------------------------
     image_files = [
-
         Path(
             r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Micro_Hemisphere\fake_micro_001.png"
         ),
-
         Path(
             r"C:\Users\chloe.jamieson\OneDrive - Simpson College\Control_Hemisphere\fake_control001.png"
         ),
-
     ]
 
     # -----------------------------------------------------------------
@@ -144,7 +214,6 @@ if __name__ == "__main__":
         # -------------------------------------------------------------
         # Build upper-star filtration
         # -------------------------------------------------------------
-        filtration = build_upper_star_filtration(image)
         filtration = build_upper_star_filtration(image)
 
         print("Filtration shape:", filtration.shape)
@@ -201,26 +270,29 @@ if __name__ == "__main__":
 
         plt.figure(figsize=(6, 6))
 
-        plt.scatter(h0[:, 1], h0[:, 2], s=10, alpha=0.7, label="H0")
-        plt.scatter(h1[:, 1], h1[:, 2], s=10, alpha=0.7, label="H1")
+        if len(h0):
+            plt.scatter(h0[:, 1], h0[:, 2], s=10, alpha=0.7, label="H0")
+        if len(h1):
+            plt.scatter(h1[:, 1], h1[:, 2], s=10, alpha=0.7, label="H1")
 
-        # Axis limits from the actual data
-        xmin = plot_births.min()
-        xmax = plot_births.max()
+        # Axis limits from the actual data if finite points exist
+        if len(plot_births) > 0 and len(plot_deaths) > 0:
+            xmin = plot_births.min()
+            xmax = plot_births.max()
 
-        ymin = plot_deaths.min()
-        ymax = plot_deaths.max()
+            ymin = plot_deaths.min()
+            ymax = plot_deaths.max()
 
-        padding = 2
+            padding = 2
 
-        plt.xlim(xmin - padding, xmax + padding)
-        plt.ylim(ymin - padding, ymax + padding)
+            plt.xlim(xmin - padding, xmax + padding)
+            plt.ylim(ymin - padding, ymax + padding)
 
-        # Diagonal
-        low = min(xmin, ymin)
-        high = max(xmax, ymax)
+            # Diagonal
+            low = min(xmin, ymin)
+            high = max(xmax, ymax)
 
-        plt.plot([low, high], [low, high], "k--", linewidth=1)
+            plt.plot([low, high], [low, high], "k--", linewidth=1)
 
         plt.xlabel("Birth")
         plt.ylabel("Death")
