@@ -61,6 +61,19 @@ def compute_upper_star(preprocessed_img):
 
     Image intensities are inverted so that bright structures receive
     lower filtration values and enter the filtration earlier.
+
+    Parameters
+    ----------
+    preprocessed_img : numpy.ndarray
+        Preprocessed grayscale image. Pixel values are expected to use the
+        same intensity scale as the persistence-binning ranges.
+
+    Returns
+    -------
+    numpy.ndarray
+        Cripser persistent-homology output. Each row contains the homology
+        dimension, birth value, death value, and any additional values
+        returned by the installed Cripser version.
     """
     image = np.asarray(preprocessed_img, dtype=float)
     inverted_image = image.max() - image
@@ -91,6 +104,29 @@ def build_persistence_binning_vector(
         H0: 3 x 3 = 9 features
         H1: 3 x 3 = 9 features
         Total: 18 features
+
+    Parameters
+    ----------
+    persistence_diagrams : sequence of numpy.ndarray
+        Collection containing the H0 and H1 birth-death diagrams. Each
+        diagram should contain one row per feature and two columns:
+        birth and death.
+    n_bins : int, optional
+        Number of bins along both the birth and persistence axes.
+        Default is 3.
+    birth_range : tuple of float, optional
+        Minimum and maximum birth values included in the binning grid.
+        Default is (0.0, 255.0).
+    persistence_range : tuple of float, optional
+        Minimum and maximum persistence values included in the binning
+        grid. Default is (0.0, 255.0).
+
+    Returns
+    -------
+    numpy.ndarray
+        One-dimensional persistence-binning vector formed by concatenating
+        the flattened H0 and H1 bin matrices. Its length is
+        2 * n_bins * n_bins.
     """
     birth_bins = np.linspace(birth_range[0], birth_range[1], n_bins + 1)
     persistence_bins = np.linspace(
@@ -143,12 +179,23 @@ def build_persistence_binning_vector(
 
 def get_image_id(image_path):
     """
-    Remove the file extension and trailing '_processed' suffix.
+    Remove the file extension and trailing ``_processed`` suffix.
 
-    Example:
-        control_stub1_0001_processed.tif
-        becomes
-        control_stub1_0001
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path or filename of the processed microscopy image.
+
+    Returns
+    -------
+    str
+        Image identifier without the file extension or trailing
+        ``_processed`` suffix.
+
+    Example
+    -------
+    ``control_stub1_0001_processed.tif`` becomes
+    ``control_stub1_0001``.
     """
     image_id = Path(image_path).stem
 
@@ -160,11 +207,25 @@ def get_image_id(image_path):
 
 def get_label_from_filename(image_path):
     """
-    Determine the class label from the image filename.
+    Determine the experimental class from an image filename.
 
-    Returns:
-        (1, "Microgravity") for microgravity images
-        (0, "Control") for control images
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path or filename containing either ``microgravity`` or ``control``.
+
+    Returns
+    -------
+    tuple of int and str
+        Numeric class label and readable class name:
+
+        - ``(1, "Microgravity")`` for microgravity images.
+        - ``(0, "Control")`` for control images.
+
+    Raises
+    ------
+    ValueError
+        If the filename contains neither ``microgravity`` nor ``control``.
     """
     filename = Path(image_path).name.lower()
 
@@ -199,14 +260,54 @@ def build_upper_star_dataset(
     Build the Upper Star persistence-binning dataset.
 
     For each image:
-        1. Load the V2 preprocessed image
-        2. Load or compute persistent homology
-        3. Separate H0 and H1
-        4. Apply persistence binning
-        5. Determine the class label
-        6. Save the individual vector
-        7. Add the vector to the combined dataset
-        8. Add one row to the vector manifest
+        1. Load the V2 preprocessed image.
+        2. Load or compute persistent homology.
+        3. Separate H0 and H1.
+        4. Apply persistence binning.
+        5. Determine the class label.
+        6. Save the individual vector.
+        7. Add the vector to the combined dataset.
+        8. Add one row to the vector manifest.
+
+    Parameters
+    ----------
+    image_paths : sequence of str or pathlib.Path
+        Paths to the V2 preprocessed microscopy images.
+    ph_output_dir : str or pathlib.Path
+        Directory containing existing upper-star persistent-homology arrays.
+        Newly computed arrays are also saved here.
+    image_vector_output_dir : str or pathlib.Path
+        Directory where one persistence-binning ``.npy`` vector is saved
+        for each image.
+    filtration_name : str
+        Filtration label included in saved vector filenames and the manifest.
+    vectorization_method : str
+        Vectorization label included in saved vector filenames and the
+        manifest.
+    preprocessing_version : str
+        Preprocessing version recorded in the manifest.
+    n_bins : int, optional
+        Number of bins along each persistence-binning axis. Default is 3.
+    birth_range : tuple of float, optional
+        Minimum and maximum birth values represented by the binning grid.
+        Default is (0.0, 255.0).
+    persistence_range : tuple of float, optional
+        Minimum and maximum persistence values represented by the binning
+        grid. Default is (0.0, 255.0).
+
+    Returns
+    -------
+    X : numpy.ndarray
+        Feature matrix with one persistence-binning vector per image.
+    y : numpy.ndarray
+        Integer class labels, where 0 represents control and 1 represents
+        microgravity.
+    image_names : numpy.ndarray
+        Original filename associated with each feature-vector row.
+    manifest_df : pandas.DataFrame
+        Image-vector manifest containing identifiers, class information,
+        processing labels, feature counts, and vector filenames.
+
     """
     ph_output_dir = Path(ph_output_dir)
     image_vector_output_dir = Path(image_vector_output_dir)
@@ -327,6 +428,39 @@ def run_repeated_ml_benchmark(
     Each run uses a different split seed. The SVM and Neural Network
     use the same train/test split within a run. The Neural Network
     initialization remains constant.
+
+    Parameters
+    ----------
+    X : numpy.ndarray
+        Feature matrix with one row per image and one column per
+        persistence-binning feature.
+    y : numpy.ndarray
+        Binary class labels corresponding to the rows of ``X``.
+    output_dir : str or pathlib.Path
+        Directory where the run-level and summary CSV tables are saved.
+    filtration_name : str
+        Filtration name recorded in each output row.
+    vectorization_method : str
+        Vectorization method recorded in each output row.
+    preprocessing_version : str
+        Preprocessing version recorded in each output row.
+    n_runs : int, optional
+        Number of stratified train/test experiments. Must be at least 2.
+        Default is 100.
+    test_size : float, optional
+        Proportion of images assigned to the test set in each run.
+        Default is 0.20.
+    mlp_random_state : int, optional
+        Fixed random state used to initialize the neural network.
+        Default is 42.
+
+    Returns
+    -------
+    all_runs_df : pandas.DataFrame
+        Run-level accuracy and F1 results for both classifiers.
+    summary_df : pandas.DataFrame
+        Mean accuracy, accuracy standard deviation, mean F1 score, and F1
+        standard deviation for each model.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -62,9 +62,24 @@ def density_filtration(binary_image, max_dist=5):
     """
     Generate a density-based filtration from a binary image.
 
-    Local foreground-pixel density is calculated within a fixed radius
-    using a KDTree. Dense regions receive lower filtration values and
-    therefore enter the filtration earlier.
+    Local foreground-pixel density is calculated within a fixed-radius
+    neighborhood using a KDTree. Dense regions receive lower filtration
+    values and therefore enter the filtration earlier.
+
+    Parameters
+    ----------
+    binary_image : numpy.ndarray
+        Two-dimensional binary image. Nonzero or True pixels are treated
+        as foreground pixels.
+    max_dist : float, optional
+        Radius of the circular neighborhood used to count nearby
+        foreground pixels. Default is 5.
+
+    Returns
+    -------
+    numpy.ndarray
+        Two-dimensional density-filtration image with the same shape as
+        `binary_image`. Lower values represent denser neighborhoods.
     """
     height, width = binary_image.shape
     points = np.argwhere(binary_image)
@@ -112,9 +127,26 @@ def compute_density_ph(binary_image, max_dist=5):
     """
     Compute persistent homology from a density filtration.
 
-    Returns:
-        density_image: density-filtration image
-        ph_density: raw Cripser persistence diagram
+    The function first constructs the density-filtration image and then
+    computes H0 and H1 persistent homology using Cripser.
+
+    Parameters
+    ----------
+    binary_image : numpy.ndarray
+        Two-dimensional binary image used to construct the density
+        filtration.
+    max_dist : float, optional
+        Radius of the neighborhood used by the density filtration.
+        Default is 5.
+
+    Returns
+    -------
+    density_image : numpy.ndarray
+        Density-filtration image used as input to Cripser.
+    ph_density : numpy.ndarray
+        Raw Cripser persistence output containing the homology dimension,
+        birth value, death value, and any additional values returned by
+        the installed Cripser version.
     """
     density_image = density_filtration(
         binary_image=binary_image,
@@ -156,6 +188,27 @@ def build_persistence_binning_vector(
         H0: 3 x 3 = 9 features
         H1: 3 x 3 = 9 features
         Total: 18 features
+
+    Parameters
+    ----------
+    persistence_diagrams : sequence of numpy.ndarray
+        Collection containing the H0 and H1 birth-death diagrams. Each
+        diagram should contain one row per feature and two columns:
+        birth and death.
+    n_bins : int
+        Number of bins along both the birth and persistence axes.
+    birth_range : tuple of float
+        Minimum and maximum birth values included in the binning grid.
+    persistence_range : tuple of float
+        Minimum and maximum persistence values included in the binning
+        grid.
+
+    Returns
+    -------
+    numpy.ndarray
+        One-dimensional persistence-binning vector formed by concatenating
+        the flattened H0 and H1 bin matrices. Its length is
+        2 * n_bins * n_bins.
     """
     birth_bins = np.linspace(
         birth_range[0],
@@ -216,7 +269,23 @@ def build_persistence_binning_vector(
 
 def get_image_id(image_path):
     """
-    Remove the file extension and trailing '_processed' suffix.
+    Remove the file extension and trailing ``_processed`` suffix.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path or filename of the processed microscopy image.
+
+    Returns
+    -------
+    str
+        Image identifier without the file extension or trailing
+        ``_processed`` suffix.
+
+    Example
+    -------
+    ``control_stub1_0001_processed.tif`` becomes
+    ``control_stub1_0001``.
     """
     image_id = Path(image_path).stem
 
@@ -228,7 +297,20 @@ def get_image_id(image_path):
 
 def get_label_from_filename(image_path):
     """
-    Determine the class label from the image filename.
+   Determine the experimental class from an image filename.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path or filename containing either ``microgravity`` or ``control``.
+
+    Returns
+    -------
+    tuple of int and str
+        Numeric class label and readable class name:
+
+        - ``(1, "Microgravity")`` for microgravity images.
+        - ``(0, "Control")`` for control images.
     """
     filename = Path(image_path).name.lower()
 
@@ -246,10 +328,25 @@ def get_label_from_filename(image_path):
 
 def get_fixed_density_ranges(max_dist):
     """
-    Determine a fixed theoretical density range shared by all images.
+    Determine fixed theoretical ranges for density persistence binning.
 
-    For max_dist=5, there are 81 integer pixel offsets within the
-    circular neighborhood.
+    The maximum possible density is the number of integer pixel offsets
+    inside a circular neighborhood with radius ``max_dist``. The same fixed
+    range is used for every image.
+
+    Parameters
+    ----------
+    max_dist : int
+        Radius of the circular density neighborhood in pixels.
+
+    Returns
+    -------
+    birth_range : tuple of float
+        Minimum and maximum birth values used by the binning grid.
+    persistence_range : tuple of float
+        Minimum and maximum persistence values used by the binning grid.
+    max_density_value : int
+        Maximum theoretical number of pixels inside the neighborhood.
     """
     coordinate_range = np.arange(-max_dist, max_dist + 1)
 
@@ -287,14 +384,50 @@ def build_density_dataset(
     Build the Density persistence-binning dataset.
 
     For each image:
-        1. Load the V2 preprocessed image
-        2. Apply Otsu thresholding
-        3. Load or compute density persistent homology
-        4. Separate H0 and H1
-        5. Apply persistence binning
-        6. Determine the class label
-        7. Save the individual vector
-        8. Add one row to the vector manifest
+        1. Load the V2 preprocessed image.
+        2. Apply Otsu thresholding.
+        3. Load or compute density persistent homology.
+        4. Separate H0 and H1.
+        5. Apply persistence binning.
+        6. Determine the class label.
+        7. Save the individual vector.
+        8. Add one row to the vector manifest.
+
+    Parameters
+    ----------
+    image_paths : sequence of str or pathlib.Path
+        Paths to the V2 preprocessed microscopy images.
+    ph_output_dir : str or pathlib.Path
+        Directory containing existing density persistent-homology arrays.
+        Newly computed arrays are also saved here.
+    image_vector_output_dir : str or pathlib.Path
+        Directory where one persistence-binning ``.npy`` vector is saved
+        for each image.
+    filtration_name : str
+        Filtration label included in saved vector filenames and the manifest.
+    vectorization_method : str
+        Vectorization label included in saved vector filenames and the
+        manifest.
+    preprocessing_version : str
+        Preprocessing version recorded in the manifest.
+    max_dist : int or float, optional
+        Radius used for the density neighborhood. Default is 5.
+    n_bins : int, optional
+        Number of bins along each persistence-binning axis. Default is 3.
+
+    Returns
+    -------
+    X : numpy.ndarray
+        Feature matrix with one persistence-binning vector per image.
+    y : numpy.ndarray
+        Integer class labels, where 0 represents control and 1 represents
+        microgravity.
+    image_names : numpy.ndarray
+        Original filename associated with each feature-vector row.
+    manifest_df : pandas.DataFrame
+        Image-vector manifest containing identifiers, class information,
+        processing labels, density radius, feature counts, and vector
+        filenames.
     """
     ph_output_dir = Path(ph_output_dir)
     image_vector_output_dir = Path(image_vector_output_dir)
@@ -453,8 +586,41 @@ def run_repeated_ml_benchmark(
     Run repeated stratified train/test experiments.
 
     Each run uses a different split seed. The SVM and Neural Network
-    use the same split within a run. The Neural Network initialization
-    remains constant.
+    use the same train/test split within a run. The Neural Network
+    initialization remains constant.
+
+    Parameters
+    ----------
+    X : numpy.ndarray
+        Feature matrix with one row per image and one column per
+        persistence-binning feature.
+    y : numpy.ndarray
+        Binary class labels corresponding to the rows of ``X``.
+    output_dir : str or pathlib.Path
+        Directory where the run-level and summary CSV tables are saved.
+    filtration_name : str
+        Filtration name recorded in each output row.
+    vectorization_method : str
+        Vectorization method recorded in each output row.
+    preprocessing_version : str
+        Preprocessing version recorded in each output row.
+    n_runs : int, optional
+        Number of stratified train/test experiments. Must be at least 2.
+        Default is 100.
+    test_size : float, optional
+        Proportion of images assigned to the test set in each run.
+        Default is 0.20.
+    mlp_random_state : int, optional
+        Fixed random state used to initialize the neural network.
+        Default is 42.
+
+    Returns
+    -------
+    all_runs_df : pandas.DataFrame
+        Run-level accuracy and F1 results for both classifiers.
+    summary_df : pandas.DataFrame
+        Mean accuracy, accuracy standard deviation, mean F1 score, and F1
+        standard deviation for each model.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

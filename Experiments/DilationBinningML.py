@@ -65,16 +65,40 @@ MLP_RANDOM_STATE = 42
 # =====================================================================
 
 def find(condition):
-    """Return indices where a Boolean condition is True."""
+    """
+    Return indices where a Boolean condition is True.
+
+    Parameters
+    ----------
+    condition : numpy.ndarray
+        Boolean array indicating which positions satisfy a condition.
+
+    Returns
+    -------
+    tuple of numpy.ndarray
+        Array indices where ``condition`` is True.
+    """
     return np.nonzero(condition)
 
 
 def biImg_by_threshold_leq(img, threshold):
     """
-    Convert a grayscale image to binary.
+    Convert a grayscale image to a binary image.
 
-    Pixels <= threshold become 0.
-    Pixels > threshold become 1.
+    Pixels less than or equal to the threshold are assigned 0, while
+    pixels greater than the threshold are assigned 1.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Two-dimensional grayscale image.
+    threshold : float
+        Intensity threshold used to separate background and foreground.
+
+    Returns
+    -------
+    numpy.ndarray
+        Binary image with the same shape as ``img``.
     """
     output_img = np.copy(img)
     output_img[find(img <= threshold)] = 0
@@ -93,7 +117,27 @@ def erosion(
     input_list_of_points,
     minimal_pixel_value=0,
 ):
-    """Perform morphological erosion on a binary image."""
+    """
+    Perform morphological dilation on a binary image.
+
+    For each background pixel, the output value is the maximum value found
+    within the structuring-element neighborhood. This expands foreground
+    regions and can connect nearby structures.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Two-dimensional binary input image.
+    input_list_of_points : sequence of numpy.ndarray
+        Coordinate offsets defining the structuring element.
+    maximal_pixel_value : int or float, optional
+        Pixel value representing the foreground. Default is 1.
+
+    Returns
+    -------
+    numpy.ndarray
+        Dilated binary image with the same shape as ``input_np_array``.
+    """
     array_shape = np.shape(input_np_array)
     output_array = np.zeros(array_shape)
 
@@ -192,7 +236,25 @@ def closing(input_np_array, input_list_of_points):
 
 @nb.jit()
 def get_rectangle_coordinates(input_np_array):
-    """Generate coordinate offsets for a rectangular kernel."""
+    """
+    Generate coordinate offsets for a rectangular structuring element.
+
+    The coordinates are centered around the middle of the supplied array
+    and are used by the morphology functions to identify neighboring
+    pixels.
+
+    Parameters
+    ----------
+    input_np_array : numpy.ndarray
+        Array whose shape determines the height and width of the
+        structuring element.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        Coordinate offsets describing every position in the rectangular
+        structuring element.
+    """
     array_shape = np.shape(input_np_array)
     output_list = []
 
@@ -215,8 +277,21 @@ def get_rectangle_coordinates(input_np_array):
 
 def get_square_SE_list(maximal_SE_lengths):
     """
-    Generate square structuring elements from 2x2 through the
-    requested maximum size.
+    Generate square structuring elements of increasing size.
+
+    Square structuring elements are created from 2 x 2 through
+    ``maximal_SE_lengths`` x ``maximal_SE_lengths``.
+
+    Parameters
+    ----------
+    maximal_SE_lengths : int
+        Maximum side length of the square structuring elements.
+
+    Returns
+    -------
+    list
+        Collection of square structuring elements represented by coordinate
+        offsets.
     """
     kernel_list = []
 
@@ -237,6 +312,25 @@ def get_square_SE_list(maximal_SE_lengths):
 def persistence_of_img(img, maxdim=1):
     """
     Compute H0 and H1 persistence diagrams from a filtration image.
+
+    Cripser is used to compute cubical persistent homology. The raw output
+    is separated into H0 connected-component intervals and H1 loop or hole
+    intervals.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Two-dimensional filtration image.
+    maxdim : int, optional
+        Maximum homology dimension calculated by Cripser. Default is 1.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        Two birth-death diagrams:
+
+        - The first array contains H0 intervals.
+        - The second array contains H1 intervals.
     """
     image = np.asarray(img, dtype=np.float64)
 
@@ -261,8 +355,27 @@ def persistence_of_morph_filtration(
     morph_type="dilation",
 ):
     """
-    Apply the selected morphology operation at increasing scales,
-    accumulate the results, and compute persistent homology.
+    Compute persistent homology from a morphological filtration.
+
+    The selected morphology operation is applied using square structuring
+    elements of increasing size. The resulting images are accumulated into
+    one filtration image before H0 and H1 persistent homology are computed.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Two-dimensional binary input image.
+    kernel_list : sequence
+        Structuring elements applied at increasing spatial scales.
+    morph_type : str, optional
+        Morphological operation used to construct the filtration. Supported
+        values are ``"closing"``, ``"erosion"``, and ``"dilation"``.
+        Default is ``"dilation"``.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        H0 and H1 birth-death persistence diagrams.
     """
     filtration_image = np.zeros(np.shape(img)) + img
 
@@ -308,10 +421,36 @@ def build_persistence_binning_vector(
     """
     Convert H0 and H1 diagrams into one persistence-binning vector.
 
+    Each point is converted from (birth, death) to
+    (birth, persistence), where persistence = death - birth.
+
     With n_bins=3:
         H0: 3 x 3 = 9 features
         H1: 3 x 3 = 9 features
         Total: 18 features
+
+    Parameters
+    ----------
+    persistence_diagrams : sequence of numpy.ndarray
+        Collection containing the H0 and H1 birth-death diagrams. Each
+        diagram should contain one row per feature and two columns:
+        birth and death.
+    n_bins : int, optional
+        Number of bins along both the birth and persistence axes.
+        Default is 3.
+    birth_range : tuple of float, optional
+        Minimum and maximum birth values included in the binning grid.
+        Default is (0.0, 20.0).
+    persistence_range : tuple of float, optional
+        Minimum and maximum persistence values included in the binning
+        grid. Default is (0.0, 20.0).
+
+    Returns
+    -------
+    numpy.ndarray
+        One-dimensional persistence-binning vector formed by concatenating
+        the flattened H0 and H1 bin matrices. Its length is
+        2 * n_bins * n_bins.
     """
     birth_bins = np.linspace(
         birth_range[0],
@@ -371,7 +510,25 @@ def build_persistence_binning_vector(
 # =====================================================================
 
 def get_image_id(image_path):
-    """Remove the extension and trailing '_processed' suffix."""
+    """
+    Remove the file extension and trailing ``_processed`` suffix.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path or filename of the processed microscopy image.
+
+    Returns
+    -------
+    str
+        Image identifier without the file extension or trailing
+        ``_processed`` suffix.
+
+    Example
+    -------
+    ``control_stub1_0001_processed.tif`` becomes
+    ``control_stub1_0001``.
+    """
     image_id = Path(image_path).stem
 
     if image_id.lower().endswith("_processed"):
@@ -381,7 +538,22 @@ def get_image_id(image_path):
 
 
 def get_label_from_filename(image_path):
-    """Determine the class label from the image filename."""
+    """
+    Determine the experimental class from an image filename.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+       Path or filename containing either ``microgravity`` or ``control``.
+
+    Returns
+    -------
+    tuple of int and str
+       Numeric class label and readable class name:
+
+       - ``(1, "Microgravity")`` for microgravity images.
+       - ``(0, "Control")`` for control images.
+    """
     filename = Path(image_path).name.lower()
 
     if "microgravity" in filename:
@@ -416,13 +588,54 @@ def build_morphology_dataset(
     Build the morphology persistence-binning dataset.
 
     For each image:
-        1. Load the V2 preprocessed image
-        2. Convert the image to binary
-        3. Load or compute morphology persistent homology
-        4. Apply persistence binning
-        5. Determine the class label
-        6. Save the individual vector
-        7. Add one row to the vector manifest
+        1. Load the V2 preprocessed image.
+        2. Convert the image to binary.
+        3. Load or compute morphology persistent homology.
+        4. Apply persistence binning.
+        5. Determine the class label.
+        6. Save the individual vector.
+        7. Add one row to the vector manifest.
+
+    Parameters
+    ----------
+    image_paths : sequence of str or pathlib.Path
+        Paths to the V2 preprocessed microscopy images.
+    ph_output_dir : str or pathlib.Path
+        Directory containing existing morphology persistent-homology files.
+        Newly computed files are also saved here.
+    image_vector_output_dir : str or pathlib.Path
+        Directory where one persistence-binning ``.npy`` vector is saved
+        for each image.
+    morph_type : str
+        Morphological operation used to construct the filtration.
+    filtration_name : str
+        Filtration label included in saved vector filenames and the manifest.
+    vectorization_method : str
+        Vectorization label included in saved vector filenames and the
+        manifest.
+    preprocessing_version : str
+        Preprocessing version recorded in the manifest.
+    threshold : float, optional
+        Fixed grayscale threshold used to create each binary image.
+        Default is 0.5.
+    max_se_length : int, optional
+        Maximum side length of the square structuring elements.
+        Default is 20.
+    n_bins : int, optional
+        Number of bins along each persistence-binning axis. Default is 3.
+
+    Returns
+    -------
+    X : numpy.ndarray
+        Feature matrix with one persistence-binning vector per image.
+    y : numpy.ndarray
+        Integer class labels, where 0 represents control and 1 represents
+        microgravity.
+    image_names : numpy.ndarray
+        Original filename associated with each feature-vector row.
+    manifest_df : pandas.DataFrame
+        Image-vector manifest containing identifiers, class information,
+        morphology settings, feature counts, and vector filenames.
     """
     ph_output_dir = Path(ph_output_dir)
     image_vector_output_dir = Path(image_vector_output_dir)
@@ -586,6 +799,40 @@ def run_repeated_ml_benchmark(
 
     Both models use the same split within each run. The neural-network
     initialization remains constant.
+
+    Parameters
+    ----------
+    X : numpy.ndarray
+        Feature matrix with one row per image and one column per
+        persistence-binning feature.
+    y : numpy.ndarray
+        Binary class labels corresponding to the rows of ``X``.
+    output_dir : str or pathlib.Path
+        Directory where the run-level and summary CSV tables are saved.
+    filtration_name : str
+        Filtration name recorded in each output row.
+    vectorization_method : str
+        Vectorization method recorded in each output row.
+    preprocessing_version : str
+        Preprocessing version recorded in each output row.
+    n_runs : int, optional
+        Number of stratified train/test experiments. Must be at least 2.
+        Default is 100.
+    test_size : float, optional
+        Proportion of images assigned to the test set in each run.
+        Default is 0.20.
+    mlp_random_state : int, optional
+        Fixed random state used to initialize the neural network.
+        Default is 42.
+
+    Returns
+    -------
+    all_runs_df : pandas.DataFrame
+        Run-level accuracy and F1 results for both classifiers.
+    summary_df : pandas.DataFrame
+        Mean accuracy, accuracy standard deviation, mean F1 score, and F1
+        standard deviation for each model.
+
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
