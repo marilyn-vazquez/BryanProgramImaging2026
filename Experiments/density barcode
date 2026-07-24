@@ -1,4 +1,7 @@
-DENSITY
+"""
+Density-Based Topological Data Analysis (TDA) & Machine Learning Pipeline
+"""
+
 import os
 import random
 from pathlib import Path
@@ -36,7 +39,24 @@ MAX_DIST = 5
 # 2. CORE HOMOLOGY & VECTORIZATION FUNCTIONS
 # =====================================================================
 def density_filtration(binary_image, max_dist=5):
-    """Compute density filtration image using vectorized KDTree queries."""
+    """
+    Computes a density filtration image from a binary image using vectorized KDTree queries.
+
+    Parameters
+    ----------
+    binary_image : numpy.ndarray
+        2D binary image array.
+    max_dist : int or float, optional
+        Maximum neighborhood distance radius for density evaluation. Default is 5.
+
+    Inputs
+    ------
+    - 2D binary pixel grid.
+
+    Outputs
+    -------
+    - numpy.ndarray: Float density filtration grid of the same shape.
+    """
     height, width = binary_image.shape
     points = np.argwhere(binary_image)
 
@@ -56,14 +76,45 @@ def density_filtration(binary_image, max_dist=5):
 
 
 def compute_density_ph(density_img):
-    """Compute density persistent homology using available Cripser API."""
+    """
+    Computes density persistent homology using the available Cripser API.
+
+    Parameters
+    ----------
+    density_img : numpy.ndarray
+        Density filtration image array.
+
+    Inputs
+    ------
+    - 64-bit float density image array.
+
+    Outputs
+    -------
+    - numpy.ndarray: Raw persistent homology diagram array.
+    """
     if hasattr(cr, "computePH"): return cr.computePH(density_img.astype(np.float64))
     if hasattr(cr, "compute_ph"): return cr.compute_ph(density_img.astype(np.float64))
     raise AttributeError("No compatible Cripser persistent-homology function found.")
 
 
 def vectorize_persistence_diagram(ph_diagram):
-    """Convert raw persistence diagram into a clean 10-dimensional summary vector."""
+    """
+    Converts a raw persistence diagram into a clean 10-dimensional summary vector.
+
+    Parameters
+    ----------
+    ph_diagram : numpy.ndarray
+        Raw persistence diagram array.
+
+    Inputs
+    ------
+    - Persistence diagram birth-death coordinates.
+
+    Outputs
+    -------
+    - numpy.ndarray: 10-element statistical feature vector containing mean, standard deviation, 
+      median, and maximum for births/deaths, and mean, standard deviation, and sum for persistence.
+    """
     ph = np.asarray(ph_diagram, dtype=np.float64)
     if ph.size == 0: return np.zeros(10, dtype=np.float64)
 
@@ -96,14 +147,44 @@ def vectorize_persistence_diagram(ph_diagram):
 # 3. UTILITY & IMAGE HELPERS
 # =====================================================================
 def get_image_id(image_path):
-    """Remove extension and trailing '_processed' suffix."""
+    """
+    Extracts the base identifier from an image path by removing extensions and trailing suffixes.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path to the image file.
+
+    Inputs
+    ------
+    - File path string or Path object.
+
+    Outputs
+    -------
+    - str: Cleaned unique image identifier string.
+    """
     image_id = Path(image_path).stem
     if image_id.lower().endswith("_processed"): image_id = image_id[:-10]
     return image_id
 
 
 def get_label_from_filename(image_path):
-    """Determine numeric and string class label from filename."""
+    """
+    Determines numeric and string class labels based on filename content.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path
+        Path to the image file.
+
+    Inputs
+    ------
+    - Filename string evaluated for keyword matching ("microgravity" or "control").
+
+    Outputs
+    -------
+    - tuple (int, str): Numeric label (1 for microgravity, 0 for control) and corresponding string label.
+    """
     filename = Path(image_path).name.lower()
     if "microgravity" in filename: return 1, "Microgravity"
     if "control" in filename: return 0, "Control"
@@ -118,7 +199,38 @@ def build_and_time_density_dataset(
         filtration_name, vectorization_method, preprocessing_version,
         save_recomputed_ph=True, max_dist=5
 ):
-    """Otsu threshold, build density filtration, compute PH, and time every stage."""
+    """
+    Applies Otsu thresholding, builds density filtrations, computes persistent homology, 
+    vectorizes diagrams into 10D features, times every execution stage, and saves individual assets.
+
+    Parameters
+    ----------
+    image_paths : list of pathlib.Path or str
+        Collection of image file paths to process.
+    ph_output_dir : str or pathlib.Path
+        Directory where persistence diagram arrays (.npy) are saved.
+    image_vector_output_dir : str or pathlib.Path
+        Directory where 10D feature vector arrays (.npy) are saved.
+    filtration_name : str
+        Name of the filtration method.
+    vectorization_method : str
+        Name of the vectorization technique.
+    preprocessing_version : str
+        Version descriptor for preprocessing.
+    save_recomputed_ph : bool, optional
+        Whether to save individual persistence diagrams to disk. Default is True.
+    max_dist : int or float, optional
+        Maximum distance neighborhood parameter for density filtration. Default is 5.
+
+    Inputs
+    ------
+    - List of image file paths on disk.
+
+    Outputs
+    -------
+    - tuple of pandas.DataFrame: Master dataset DataFrame containing features and metadata, 
+      and a timing records DataFrame.
+    """
     os.makedirs(ph_output_dir, exist_ok=True)
     os.makedirs(image_vector_output_dir, exist_ok=True)
 
@@ -172,7 +284,34 @@ def build_and_time_density_dataset(
 # 5. MACHINE LEARNING MODEL PIPELINE
 # =====================================================================
 def evaluate_model(model, name, X_train, X_test, y_train, y_test):
-    """Train and evaluate a standard ML model, recording accuracy and performance."""
+    """
+    Trains and evaluates a standard machine learning model, recording timing, accuracy, 
+    F1 score, and confusion matrix components.
+
+    Parameters
+    ----------
+    model : estimator object
+        Scikit-learn compatible classifier instance.
+    name : str
+        Display name of the model.
+    X_train : numpy.ndarray
+        Training feature matrix.
+    X_test : numpy.ndarray
+        Testing feature matrix.
+    y_train : numpy.ndarray
+        Training target labels.
+    y_test : numpy.ndarray
+        Testing target labels.
+
+    Inputs
+    ------
+    - Scaled feature matrices and target vectors.
+
+    Outputs
+    -------
+    - dict: Performance dictionary containing model name, execution time, accuracy, F1 score, 
+      and confusion matrix values (TN, FP, FN, TP).
+    """
     t0 = perf_counter()
     pipeline = make_pipeline(StandardScaler(), model)
     pipeline.fit(X_train, y_train)
@@ -188,7 +327,25 @@ def evaluate_model(model, name, X_train, X_test, y_train, y_test):
 
 
 def run_experiment(image_paths, output_root):
-    """Execute the full data construction and model assessment pipeline."""
+    """
+    Executes the full data construction, feature extraction, timing analysis, 
+    and model assessment pipeline, saving all results to CSV reports.
+
+    Parameters
+    ----------
+    image_paths : list of pathlib.Path or str
+        Collection of processed image file paths.
+    output_root : str or pathlib.Path
+        Root directory path where output subdirectories and CSV tables are saved.
+
+    Inputs
+    ------
+    - Image file paths and output root directory.
+
+    Outputs
+    -------
+    - Disk files: dataset.csv, image_timing.csv, timing_summary.csv, and model_results.csv.
+    """
     ph_dir = os.path.join(output_root, "PH_Arrays")
     vec_dir = os.path.join(output_root, "Vectors")
 
